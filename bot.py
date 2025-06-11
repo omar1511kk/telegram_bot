@@ -27,7 +27,7 @@ def smart_search(query):
     query = query.strip().lower()
     exact_matches = [title for title in FILES if query in title.lower()]
     if exact_matches:
-        return exact_matches[0]  # الأفضلية للمطابقة الجزئية المباشرة
+        return exact_matches[0]
     close_matches = difflib.get_close_matches(query, FILES.keys(), n=1, cutoff=0.5)
     return close_matches[0] if close_matches else None
 
