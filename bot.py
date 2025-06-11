@@ -24,14 +24,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # التعامل مع الرسائل النصية
 async def send_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.message.text.strip()
+    if not update.message or not update.message.text:
+        return
 
-    # محاولة مطابقة الاسم بشكل تقريبي
-    matches = difflib.get_close_matches(query, FILES.keys(), n=1, cutoff=0.4)
+    query = update.message.text.strip()
+    matches = difflib.get_close_matches(query, FILES.keys(), n=3, cutoff=0.3)
 
     if matches:
         best_match = matches[0]
         file_path = FILES[best_match]
+        await update.message.reply_text(f"📘 تم العثور على: {best_match}")
         with open(file_path, "rb") as f:
             await update.message.reply_document(InputFile(f, filename=os.path.basename(file_path)))
     else:
