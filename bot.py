@@ -6,12 +6,12 @@ from telegram.ext import Application, CommandHandler, MessageHandler, ContextTyp
 
 # بيانات الكتب المتوفرة
 FILES = {
-    "محمد بن عبد الوهاب ثلاثة الأصول وأدلتها": "files/ثلاثة_الاصول.pdf",
+    "ثلاثة الأصول وأدلتها - محمد بن عبد الوهاب": "files/ثلاثة_الاصول.pdf",
     "العقيدة الواسطية": "files/العقيدة_الواسطية.pdf",
-    "القواعد الأربعة محمد بن عبد الوهاب": "files/القواعد_الاربعة.pdf",
-    "خلاصة تعظيم العلم صالح العصيمي": "files/خلاصة_تعظيم_العلم.pdf",
-    "شروط الصلاة،وأركانها، وواجباتها": "files/شروط_الصلاة.pdf",
-    "كتاب التوحيد محمد بن عبد الوهاب": "files/كتاب_التوحيد.pdf",
+    "القواعد الأربعة - محمد بن عبد الوهاب": "files/القواعد_الاربعة.pdf",
+    "خلاصة تعظيم العلم - صالح العصيمي": "files/خلاصة_تعظيم_العلم.pdf",
+    "شروط الصلاة وأركانها وواجباتها": "files/شروط_الصلاة.pdf",
+    "كتاب التوحيد - محمد بن عبد الوهاب": "files/كتاب_التوحيد.pdf",
     "نواقض الإسلام": "files/نواقض_الاسلام.pdf",
 }
 
@@ -22,18 +22,23 @@ TOKEN = os.getenv("BOT_TOKEN")
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("مرحبًا بك في البوت الإسلامي 🌛\nأرسل اسم الكتاب للحصول عليه.")
 
+# البحث الذكي في أسماء الكتب
+def smart_search(query):
+    query = query.strip().lower()
+    exact_matches = [title for title in FILES if query in title.lower()]
+    if exact_matches:
+        return exact_matches[0]  # الأفضلية للمطابقة الجزئية المباشرة
+    close_matches = difflib.get_close_matches(query, FILES.keys(), n=1, cutoff=0.5)
+    return close_matches[0] if close_matches else None
+
 # التعامل مع الرسائل النصية
 async def send_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message or not update.message.text:
-        return
+    query = update.message.text
+    match = smart_search(query)
 
-    query = update.message.text.strip()
-    matches = difflib.get_close_matches(query, FILES.keys(), n=3, cutoff=0.3)
-
-    if matches:
-        best_match = matches[0]
-        file_path = FILES[best_match]
-        await update.message.reply_text(f"📘 تم العثور على: {best_match}")
+    if match:
+        file_path = FILES[match]
+        await update.message.reply_text(f"📘 تم العثور على: {match}")
         with open(file_path, "rb") as f:
             await update.message.reply_document(InputFile(f, filename=os.path.basename(file_path)))
     else:
