@@ -1,15 +1,15 @@
 import os
 import difflib
 import unicodedata
-import time
 from aiohttp import web
 from telegram import Update, InputFile, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, CallbackQueryHandler, filters
+from datetime import datetime, timedelta
 
 # ✅ إزالة التشكيل والهمزات والنormalization
 def normalize(text):
     text = unicodedata.normalize("NFKD", text)
-    text = ''.join([c for c in text if not unicodedata.combining(c)])  # إزالة التشكيل
+    text = ''.join([c for c in text if not unicodedata.combining(c)])
     text = text.replace("أ", "ا").replace("إ", "ا").replace("آ", "ا").replace("ة", "ه")
     return text.lower().strip()
 
@@ -24,6 +24,17 @@ FILES = {
     "خلاصة تعظيم العلم صالح العصيمي": "files/خلاصة_تعظيم_العلم_صالح_العصيمي.pdf"
 }
 
+# ⏳ حماية من السبام
+last_message_time = {}
+
+def is_spam(user_id):
+    now = datetime.now()
+    last_time = last_message_time.get(user_id)
+    if last_time and (now - last_time).total_seconds() < 5:
+        return True
+    last_message_time[user_id] = now
+    return False
+
 # 🔍 البحث الذكي
 def smart_search(query):
     norm_query = normalize(query)
@@ -34,18 +45,12 @@ def smart_search(query):
     close_matches = difflib.get_close_matches(norm_query, norm_titles.keys(), n=1, cutoff=0.5)
     return norm_titles[close_matches[0]] if close_matches else None
 
-# 📥 التعامل مع الرسائل (مع حماية من السبام)
+# 📥 التعامل مع الرسائل
 async def send_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    now = time.time()
-    last_time = context.user_data.get("last_request_time", 0)
-
-    if now - last_time < 5:  # أقل من 5 ثوانٍ
-        await update.message.reply_text("⏳ الرجاء الانتظار قليلاً قبل طلب كتاب آخر.")
+    if is_spam(user_id):
+        await update.message.reply_text("⌛ الرجاء الانتظار بضع ثوانٍ قبل إرسال رسالة جديدة.")
         return
-
-    context.user_data["last_request_time"] = now
-
     query = update.message.text
     match = smart_search(query)
     if match:
@@ -56,8 +61,12 @@ async def send_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("❌ لم يتم العثور على الكتاب. تأكد من كتابة الاسم بشكل صحيح.")
 
-# ✅ رسالة /start مع زر "📚 عرض الكتب"
+# ✅ أمر /start مع زر "📚 عرض الكتب"
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if is_spam(user_id):
+        await update.message.reply_text("⌛ الرجاء الانتظار بضع ثوانٍ قبل استخدام الأمر مرة أخرى.")
+        return
     username = update.effective_user.first_name or "أخي الكريم"
     keyboard = [
         [InlineKeyboardButton("📚 عرض الكتب", callback_data="show_books")]
@@ -73,30 +82,28 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=reply_markup
     )
 
-# ✅ أمر /books لعرض قائمة الكتب
+# ✅ أمر /books لعرض الكتب
 async def list_books(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if is_spam(user_id):
+        await update.message.reply_text("⌛ الرجاء الانتظار قبل استخدام الأمر مرة أخرى.")
+        return
     books = "\n".join([f"{i+1}⃣ {title}" for i, title in enumerate(FILES.keys())])
     await update.message.reply_text(f"📚 الكتب المتوفرة:\n\n{books}\n\n✍ أرسل اسم الكتاب كما هو أو قريبًا منه.")
 
-# 🔘 رد على ضغط زر "عرض الكتب" مع حماية سبام
+# 🔘 عند الضغط على زر "📚 عرض الكتب"
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = query.from_user.id
-    now = time.time()
-    last_click = context.user_data.get("last_button_time", 0)
-
-    if now - last_click < 5:
-        await query.answer("⏳ انتظر قليلًا قبل الضغط مرة أخرى.", show_alert=False)
+    if is_spam(user_id):
+        await query.answer("⌛ الرجاء الانتظار قبل إعادة الضغط.", show_alert=True)
         return
-
-    context.user_data["last_button_time"] = now
     await query.answer()
-
     if query.data == "show_books":
         books = "\n".join([f"{i+1}⃣ {title}" for i, title in enumerate(FILES.keys())])
         await query.edit_message_text(f"📚 الكتب المتوفرة:\n\n{books}\n\n✍ أرسل اسم الكتاب كما هو أو قريبًا منه.")
 
-# إعداد التطبيق
+# ✅ إعداد التطبيق
 TOKEN = os.getenv("BOT_TOKEN")
 application = Application.builder().token(TOKEN).build()
 application.add_handler(CommandHandler("start", start))
@@ -104,21 +111,19 @@ application.add_handler(CommandHandler("books", list_books))
 application.add_handler(CallbackQueryHandler(button_handler))
 application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, send_file))
 
-# Webhook
+# ✅ Webhook
 async def handle_webhook(request):
     data = await request.json()
     update = Update.de_json(data, application.bot)
     await application.process_update(update)
     return web.Response()
 
-# بدء التطبيق مع Webhook
 async def on_startup(app):
     webhook_url = os.getenv("WEBHOOK_URL")
     await application.bot.set_webhook(webhook_url)
     await application.initialize()
     await application.start()
 
-# إعداد خادم الويب
 web_app = web.Application()
 web_app.router.add_post("/webhook", handle_webhook)
 web_app.on_startup.append(on_startup)
