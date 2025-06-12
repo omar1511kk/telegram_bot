@@ -1,6 +1,7 @@
 import os
 import difflib
 import unicodedata
+import sqlite3
 from datetime import datetime
 from aiohttp import web
 from telegram import Update, InputFile, InlineKeyboardButton, InlineKeyboardMarkup
@@ -8,6 +9,25 @@ from telegram.ext import (
     Application, CommandHandler, MessageHandler,
     ContextTypes, CallbackQueryHandler, filters
 )
+
+# ---------------------------
+# 📦 قاعدة بيانات المستخدمين
+# ---------------------------
+DB_PATH = "users.db"
+
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            user_id INTEGER PRIMARY KEY,
+            username TEXT,
+            country TEXT,
+            timezone TEXT
+        )
+    """)
+    conn.commit()
+    conn.close()
 
 # ---------------------------
 # 🔤 تطبيع النص (إزالة التشكيل والهمزات)
@@ -51,12 +71,10 @@ def smart_search(query):
     norm_query = normalize(query)
     norm_titles = {normalize(title): title for title in FILES}
     
-    # بحث مباشر
     exact_matches = [original for norm, original in norm_titles.items() if norm_query in norm]
     if exact_matches:
         return exact_matches[0]
     
-    # بحث تقريبي
     close_matches = difflib.get_close_matches(norm_query, norm_titles.keys(), n=1, cutoff=0.5)
     return norm_titles[close_matches[0]] if close_matches else None
 
@@ -156,6 +174,7 @@ async def on_startup(app):
     await application.bot.set_webhook(webhook_url)
     await application.initialize()
     await application.start()
+    init_db()  # 🧱 تهيئة قاعدة البيانات
 
 web_app = web.Application()
 web_app.router.add_post("/webhook", handle_webhook)
