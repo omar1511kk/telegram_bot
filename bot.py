@@ -5,7 +5,7 @@ from aiohttp import web
 from telegram import Update, InputFile, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
 
-# ✅ إزالة التشكيل والهمزات والنormalization
+# ✅ إزالة التشكيل والهمزات والنورمالايز
 def normalize(text):
     text = unicodedata.normalize("NFKD", text)
     text = ''.join([c for c in text if not unicodedata.combining(c)])
@@ -36,13 +36,13 @@ def smart_search(query):
 # ✅ رسالة /start مع الأزرار
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
-        [InlineKeyboardButton("📚 قائمة الكتب", callback_data="list_books")],
         [InlineKeyboardButton("📘 العقيدة الواسطية", callback_data="العقيدة الواسطية")],
         [InlineKeyboardButton("📘 القواعد الأربعة", callback_data="القواعد الأربعة محمد بن عبد الوهاب")],
         [InlineKeyboardButton("📘 شروط الصلاة", callback_data="شروط الصلاة، وأركانها، وواجباتها.")],
         [InlineKeyboardButton("📘 كتاب التوحيد", callback_data="كتاب التوحيد محمد بن عبد الوهاب.")],
         [InlineKeyboardButton("📘 ثلاثة الأصول", callback_data="محمد بن عبد الوهاب ثلاثة الأصول وأدلتها.")],
-        [InlineKeyboardButton("📘 نواقض الإسلام", callback_data="نواقض الإسلام")]
+        [InlineKeyboardButton("📘 نواقض الإسلام", callback_data="نواقض الإسلام")],
+        [InlineKeyboardButton("📚 قائمة الكتب", callback_data="list_books")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(
@@ -54,26 +54,26 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=reply_markup
     )
 
-# ✅ التعامل مع الأزرار
+# 📥 عند الضغط على زر
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    data = query.data
+    book_title = query.data
 
-    if data == "list_books":
-        book_list = "📚 قائمة الكتب المتوفرة:\n\n"
-        for title in FILES:
-            book_list += f"• {title}\n"
-        await query.message.reply_text(book_list)
-    elif data in FILES:
-        file_path = FILES[data]
-        await query.message.reply_text(f"📘 تم العثور على: {data}")
+    # ✅ التعامل مع زر "قائمة الكتب"
+    if book_title == "list_books":
+        book_list = "\n".join([f"• {title}" for title in FILES.keys()])
+        await query.message.reply_text(f"📚 قائمة الكتب المتوفرة:\n\n{book_list}")
+        return
+
+    # ✅ التعامل مع اختيار كتاب محدد
+    if book_title in FILES:
+        file_path = FILES[book_title]
+        await query.message.reply_text(f"📘 تم العثور على: {book_title}")
         with open(file_path, "rb") as f:
             await query.message.reply_document(InputFile(f, filename=os.path.basename(file_path)))
-    else:
-        await query.message.reply_text("❌ لم يتم العثور على الكتاب.")
 
-# ✅ التعامل مع البحث اليدوي
+# 📥 البحث اليدوي
 async def send_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.message.text
     match = smart_search(query)
