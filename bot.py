@@ -1,52 +1,34 @@
 import os
 import difflib
-import re
 from aiohttp import web
 from telegram import Update, InputFile
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
 
-# بيانات الكتب المتوفرة
+# بيانات الكتب المتوفرة (اسم الكتاب ← مسار الملف)
 FILES = {
-    "ثلاثة الأصول وأدلتها - محمد بن عبد الوهاب": "files/ثلاثة_الاصول.pdf",
     "العقيدة الواسطية": "files/العقيدة_الواسطية.pdf",
-    "القواعد الأربعة - محمد بن عبد الوهاب": "files/القواعد_الاربعة.pdf",
-    "خلاصة تعظيم العلم - صالح العصيمي": "files/خلاصة_تعظيم_العلم.pdf",
-    "شروط الصلاة وأركانها وواجباتها": "files/شروط_الصلاة.pdf",
-    "كتاب التوحيد - محمد بن عبد الوهاب": "files/كتاب_التوحيد.pdf",
+    "القواعد الأربعة محمد بن عبد الوهاب": "files/القواعد_الأربعة_محمد_بن_عبد_الوهاب.pdf",
+    "شروط الصلاة، وأركانها، وواجباتها.": "files/شروط_الصلاة_وأركانها_وواجباتها.pdf",
+    "كتاب التوحيد محمد بن عبد الوهاب.": "files/كتاب_التوحيد_محمد_بن_عبد_الوهاب.pdf",
+    "محمد بن عبد الوهاب ثلاثة الأصول وأدلتها.": "files/محمد_بن_عبد_الوهاب_ثلاثة_الأصول_وأدلتها.pdf",
     "نواقض الإسلام": "files/نواقض_الاسلام.pdf",
 }
-
-# دالة لتطبيع النص (إزالة الهمزات والتشكيل)
-def normalize(text):
-    text = text.lower()
-    text = re.sub(r'[إأآا]', 'ا', text)
-    text = re.sub(r'[ًٌٍَُِّْـ]', '', text)  # إزالة التشكيل
-    text = re.sub(r'[^\w\s]', '', text)  # إزالة الرموز غير الحروف
-    return text.strip()
-
-# البحث الذكي في أسماء الكتب
-def smart_search(query):
-    query_norm = normalize(query)
-    normalized_files = {normalize(k): k for k in FILES}
-
-    # بحث تطابق جزئي
-    for norm_title, orig_title in normalized_files.items():
-        if query_norm in norm_title:
-            return orig_title
-
-    # بحث تقريبي
-    close_matches = difflib.get_close_matches(query_norm, normalized_files.keys(), n=1, cutoff=0.4)
-    if close_matches:
-        return normalized_files[close_matches[0]]
-
-    return None
 
 # التوكن من متغير البيئة
 TOKEN = os.getenv("BOT_TOKEN")
 
-# بدء البوت
+# رسالة البداية
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("مرحبًا بك في البوت الإسلامي 🌛\nأرسل اسم الكتاب للحصول عليه.")
+
+# دالة البحث الذكي
+def smart_search(query):
+    query = query.strip().lower()
+    exact_matches = [title for title in FILES if query in title.lower()]
+    if exact_matches:
+        return exact_matches[0]  # الأفضلية للمطابقة الجزئية
+    close_matches = difflib.get_close_matches(query, FILES.keys(), n=1, cutoff=0.5)
+    return close_matches[0] if close_matches else None
 
 # التعامل مع الرسائل النصية
 async def send_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
