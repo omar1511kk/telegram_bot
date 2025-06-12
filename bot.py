@@ -2,13 +2,13 @@ import os
 import difflib
 import unicodedata
 from aiohttp import web
-from telegram import Update, InputFile
-from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
+from telegram import Update, InputFile, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
 
 # ✅ إزالة التشكيل والهمزات والنormalization
 def normalize(text):
     text = unicodedata.normalize("NFKD", text)
-    text = ''.join([c for c in text if not unicodedata.combining(c)])  # إزالة التشكيل
+    text = ''.join([c for c in text if not unicodedata.combining(c)])
     text = text.replace("أ", "ا").replace("إ", "ا").replace("آ", "ا").replace("ة", "ه")
     return text.lower().strip()
 
@@ -30,11 +30,41 @@ def smart_search(query):
     exact_matches = [original for norm, original in norm_titles.items() if norm_query in norm]
     if exact_matches:
         return exact_matches[0]
-    # محاولة تقريبية إن لم توجد مطابقة جزئية
     close_matches = difflib.get_close_matches(norm_query, norm_titles.keys(), n=1, cutoff=0.5)
     return norm_titles[close_matches[0]] if close_matches else None
 
-# 📥 التعامل مع الرسائل
+# ✅ رسالة /start مع الأزرار
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        [InlineKeyboardButton("📘 العقيدة الواسطية", callback_data="العقيدة الواسطية")],
+        [InlineKeyboardButton("📘 القواعد الأربعة", callback_data="القواعد الأربعة محمد بن عبد الوهاب")],
+        [InlineKeyboardButton("📘 شروط الصلاة", callback_data="شروط الصلاة، وأركانها، وواجباتها.")],
+        [InlineKeyboardButton("📘 كتاب التوحيد", callback_data="كتاب التوحيد محمد بن عبد الوهاب.")],
+        [InlineKeyboardButton("📘 ثلاثة الأصول", callback_data="محمد بن عبد الوهاب ثلاثة الأصول وأدلتها.")],
+        [InlineKeyboardButton("📘 نواقض الإسلام", callback_data="نواقض الإسلام")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text(
+        "السلام عليكم ورحمة الله وبركاته 🌿\n"
+        "قال رسول الله ﷺ:\n"
+        "«من صلى عليَّ صلاة، صلى الله عليه بها عشرًا» (رواه مسلم)\n\n"
+        "🌟 لا تحرم نفسك من هذا الأجر، صلِّ على النبي ﷺ.\n\n"
+        "أرسل اسم الكتاب أو اختر من القائمة أدناه:",
+        reply_markup=reply_markup
+    )
+
+# 📥 عند الضغط على زر
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    book_title = query.data
+    if book_title in FILES:
+        file_path = FILES[book_title]
+        await query.message.reply_text(f"📘 تم العثور على: {book_title}")
+        with open(file_path, "rb") as f:
+            await query.message.reply_document(InputFile(f, filename=os.path.basename(file_path)))
+
+# 📥 البحث اليدوي
 async def send_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.message.text
     match = smart_search(query)
@@ -46,44 +76,28 @@ async def send_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("❌ لم يتم العثور على الكتاب. تأكد من كتابة الاسم بشكل صحيح.")
 
-# ✅ رسالة /start
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "السلام عليكم ورحمة الله وبركاته 🌿\n"
-        "قال رسول الله ﷺ:\n"
-        "«من صلى عليَّ صلاة، صلى الله عليه بها عشرًا» (رواه مسلم)\n\n"
-        "🌟 لا تحرم نفسك من هذا الأجر، صلِّ على النبي ﷺ.\n\n"
-        "أرسل اسم الكتاب للحصول على نسخه PDF.\n"
-        "اكتب /books لعرض قائمة الكتب المتوفرة."
-    )
-
-# ✅ أمر /books لعرض قائمة الكتب
-async def list_books(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    books = "\n".join([f"{i+1}⃣ {title}" for i, title in enumerate(FILES.keys())])
-    await update.message.reply_text(f"📚 الكتب المتوفرة:\n\n{books}\n\n✍ أرسل اسم الكتاب كما هو أو قريبًا منه.")
-
-# إعداد التطبيق
+# ✅ إعداد التطبيق
 TOKEN = os.getenv("BOT_TOKEN")
 application = Application.builder().token(TOKEN).build()
 application.add_handler(CommandHandler("start", start))
-application.add_handler(CommandHandler("books", list_books))
+application.add_handler(CallbackQueryHandler(button_handler))
 application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, send_file))
 
-# Webhook
+# ✅ Webhook
 async def handle_webhook(request):
     data = await request.json()
     update = Update.de_json(data, application.bot)
     await application.process_update(update)
     return web.Response()
 
-# بدء التطبيق مع Webhook
+# ✅ بدء التطبيق مع Webhook
 async def on_startup(app):
     webhook_url = os.getenv("WEBHOOK_URL")
     await application.bot.set_webhook(webhook_url)
     await application.initialize()
     await application.start()
 
-# إعداد خادم الويب
+# ✅ إعداد خادم الويب
 web_app = web.Application()
 web_app.router.add_post("/webhook", handle_webhook)
 web_app.on_startup.append(on_startup)
