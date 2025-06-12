@@ -36,6 +36,7 @@ def smart_search(query):
 # ✅ رسالة /start مع الأزرار
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
+        [InlineKeyboardButton("📚 قائمة الكتب", callback_data="list_books")],
         [InlineKeyboardButton("📘 العقيدة الواسطية", callback_data="العقيدة الواسطية")],
         [InlineKeyboardButton("📘 القواعد الأربعة", callback_data="القواعد الأربعة محمد بن عبد الوهاب")],
         [InlineKeyboardButton("📘 شروط الصلاة", callback_data="شروط الصلاة، وأركانها، وواجباتها.")],
@@ -53,18 +54,26 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=reply_markup
     )
 
-# 📥 عند الضغط على زر
+# ✅ التعامل مع الأزرار
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    book_title = query.data
-    if book_title in FILES:
-        file_path = FILES[book_title]
-        await query.message.reply_text(f"📘 تم العثور على: {book_title}")
+    data = query.data
+
+    if data == "list_books":
+        book_list = "📚 قائمة الكتب المتوفرة:\n\n"
+        for title in FILES:
+            book_list += f"• {title}\n"
+        await query.message.reply_text(book_list)
+    elif data in FILES:
+        file_path = FILES[data]
+        await query.message.reply_text(f"📘 تم العثور على: {data}")
         with open(file_path, "rb") as f:
             await query.message.reply_document(InputFile(f, filename=os.path.basename(file_path)))
+    else:
+        await query.message.reply_text("❌ لم يتم العثور على الكتاب.")
 
-# 📥 البحث اليدوي
+# ✅ التعامل مع البحث اليدوي
 async def send_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.message.text
     match = smart_search(query)
