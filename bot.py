@@ -46,10 +46,11 @@ async def send_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("❌ لم يتم العثور على الكتاب. تأكد من كتابة الاسم بشكل صحيح.")
 
-# ✅ رسالة /start الجديدة
+# ✅ رسالة /start الجديدة مع اسم المستخدم
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_firstname = update.effective_user.first_name or "أخي الكريم"
     await update.message.reply_text(
-        "السلام عليكم ورحمة الله وبركاته 🌿\n"
+        f"السلام عليكم ورحمة الله وبركاته، {user_firstname} 🌿\n"
         "قال رسول الله ﷺ:\n"
         "«من صلى عليَّ صلاة، صلى الله عليه بها عشرًا» (رواه مسلم)\n\n"
         "🌟 لا تحرم نفسك من هذا الأجر، صلِّ على النبي ﷺ.\n\n"
