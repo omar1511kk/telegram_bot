@@ -108,6 +108,23 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     username = update.effective_user.first_name or "أخي الكريم"
+
+    # ✅ تسجيل المستخدم في قاعدة البيانات
+    language_code = update.effective_user.language_code or "unknown"
+    country_code = language_code.split("-")[-1] if "-" in language_code else language_code
+    timezone = "UTC"  # يمكن لاحقًا تحديثه حسب الدولة المختارة
+
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT OR REPLACE INTO users (user_id, username, country, timezone)
+        VALUES (?, ?, ?, ?)
+    """, (user_id, username, country_code, timezone))
+    conn.commit()
+    conn.close()
+
+    print(f"✅ تم حفظ المستخدم: {user_id}, الاسم: {username}, الدولة: {country_code}, اللغة: {language_code}")
+
     keyboard = [[InlineKeyboardButton("📚 عرض الكتب", callback_data="show_books")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
