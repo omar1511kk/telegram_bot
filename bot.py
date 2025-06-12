@@ -1,10 +1,18 @@
 import os
 import difflib
+import unicodedata
 from aiohttp import web
 from telegram import Update, InputFile
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
 
-# بيانات الكتب المتوفرة (اسم الكتاب ← مسار الملف)
+# ✅ إزالة التشكيل والهمزات والنormalization
+def normalize(text):
+    text = unicodedata.normalize("NFKD", text)
+    text = ''.join([c for c in text if not unicodedata.combining(c)])  # إزالة التشكيل
+    text = text.replace("أ", "ا").replace("إ", "ا").replace("آ", "ا").replace("ة", "ه")
+    return text.lower().strip()
+
+# ✅ قاعدة بيانات الكتب
 FILES = {
     "العقيدة الواسطية": "files/العقيدة_الواسطية.pdf",
     "القواعد الأربعة محمد بن عبد الوهاب": "files/القواعد_الأربعة_محمد_بن_عبد_الوهاب.pdf",
@@ -12,29 +20,24 @@ FILES = {
     "كتاب التوحيد محمد بن عبد الوهاب.": "files/كتاب_التوحيد_محمد_بن_عبد_الوهاب.pdf",
     "محمد بن عبد الوهاب ثلاثة الأصول وأدلتها.": "files/محمد_بن_عبد_الوهاب_ثلاثة_الأصول_وأدلتها.pdf",
     "نواقض الإسلام": "files/نواقض_الاسلام.pdf",
+    "خلاصة تعظيم العلم صالح العصيمي": "files/خلاصة_تعظيم_العلم_صالح_العصيمي.pdf"
 }
 
-# التوكن من متغير البيئة
-TOKEN = os.getenv("BOT_TOKEN")
-
-# رسالة البداية
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("مرحبًا بك في البوت الإسلامي 🌛\nأرسل اسم الكتاب للحصول عليه.")
-
-# دالة البحث الذكي
+# 🔍 البحث الذكي
 def smart_search(query):
-    query = query.strip().lower()
-    exact_matches = [title for title in FILES if query in title.lower()]
+    norm_query = normalize(query)
+    norm_titles = {normalize(title): title for title in FILES}
+    exact_matches = [original for norm, original in norm_titles.items() if norm_query in norm]
     if exact_matches:
-        return exact_matches[0]  # الأفضلية للمطابقة الجزئية
-    close_matches = difflib.get_close_matches(query, FILES.keys(), n=1, cutoff=0.5)
-    return close_matches[0] if close_matches else None
+        return exact_matches[0]
+    # محاولة تقريبية إن لم توجد مطابقة جزئية
+    close_matches = difflib.get_close_matches(norm_query, norm_titles.keys(), n=1, cutoff=0.5)
+    return norm_titles[close_matches[0]] if close_matches else None
 
-# التعامل مع الرسائل النصية
+# 📥 التعامل مع الرسائل
 async def send_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.message.text
     match = smart_search(query)
-
     if match:
         file_path = FILES[match]
         await update.message.reply_text(f"📘 تم العثور على: {match}")
@@ -43,26 +46,31 @@ async def send_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("❌ لم يتم العثور على الكتاب. تأكد من كتابة الاسم بشكل صحيح.")
 
+# /start
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("مرحبًا بك في البوت الإسلامي 🌙\nأرسل اسم الكتاب للحصول على نسخه PDF.")
+
 # إعداد التطبيق
+TOKEN = os.getenv("BOT_TOKEN")
 application = Application.builder().token(TOKEN).build()
 application.add_handler(CommandHandler("start", start))
 application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, send_file))
 
-# إعداد webhook
+# Webhook
 async def handle_webhook(request):
     data = await request.json()
     update = Update.de_json(data, application.bot)
     await application.process_update(update)
     return web.Response()
 
-# عند بدء السيرفر
+# بدء التطبيق مع Webhook
 async def on_startup(app):
     webhook_url = os.getenv("WEBHOOK_URL")
     await application.bot.set_webhook(webhook_url)
     await application.initialize()
     await application.start()
 
-# إعداد السيرفر
+# إعداد خادم الويب
 web_app = web.Application()
 web_app.router.add_post("/webhook", handle_webhook)
 web_app.on_startup.append(on_startup)
