@@ -2,8 +2,8 @@ import os
 import difflib
 import unicodedata
 from aiohttp import web
-from telegram import Update, InputFile
-from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
+from telegram import Update, InputFile, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, CallbackQueryHandler, filters
 
 # ✅ إزالة التشكيل والهمزات والنormalization
 def normalize(text):
@@ -30,7 +30,6 @@ def smart_search(query):
     exact_matches = [original for norm, original in norm_titles.items() if norm_query in norm]
     if exact_matches:
         return exact_matches[0]
-    # محاولة تقريبية إن لم توجد مطابقة جزئية
     close_matches = difflib.get_close_matches(norm_query, norm_titles.keys(), n=1, cutoff=0.5)
     return norm_titles[close_matches[0]] if close_matches else None
 
@@ -46,16 +45,21 @@ async def send_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("❌ لم يتم العثور على الكتاب. تأكد من كتابة الاسم بشكل صحيح.")
 
-# ✅ رسالة /start
+# ✅ رسالة /start مع زر "📚 عرض الكتب"
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     username = update.effective_user.first_name or "أخي الكريم"
+    keyboard = [
+        [InlineKeyboardButton("📚 عرض الكتب", callback_data="show_books")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(
         f"السلام عليكم ورحمة الله وبركاته، {username} 🌿\n"
         "قال رسول الله ﷺ:\n"
         "«من صلى عليَّ صلاة، صلى الله عليه بها عشرًا» (رواه مسلم)\n\n"
         "🌟 لا تحرم نفسك من هذا الأجر، صلِّ على النبي ﷺ.\n\n"
         "أرسل اسم الكتاب للحصول على نسخه PDF.\n"
-        "اكتب /books لعرض قائمة الكتب المتوفرة."
+        "أو اضغط الزر أدناه ⬇",
+        reply_markup=reply_markup
     )
 
 # ✅ أمر /books لعرض قائمة الكتب
@@ -63,11 +67,20 @@ async def list_books(update: Update, context: ContextTypes.DEFAULT_TYPE):
     books = "\n".join([f"{i+1}⃣ {title}" for i, title in enumerate(FILES.keys())])
     await update.message.reply_text(f"📚 الكتب المتوفرة:\n\n{books}\n\n✍ أرسل اسم الكتاب كما هو أو قريبًا منه.")
 
+# 🔘 رد على ضغط زر "عرض الكتب"
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if query.data == "show_books":
+        books = "\n".join([f"{i+1}⃣ {title}" for i, title in enumerate(FILES.keys())])
+        await query.edit_message_text(f"📚 الكتب المتوفرة:\n\n{books}\n\n✍ أرسل اسم الكتاب كما هو أو قريبًا منه.")
+
 # إعداد التطبيق
 TOKEN = os.getenv("BOT_TOKEN")
 application = Application.builder().token(TOKEN).build()
 application.add_handler(CommandHandler("start", start))
 application.add_handler(CommandHandler("books", list_books))
+application.add_handler(CallbackQueryHandler(button_handler))
 application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, send_file))
 
 # Webhook
