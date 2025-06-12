@@ -1,19 +1,26 @@
 import os
 import difflib
 import unicodedata
+from datetime import datetime
 from aiohttp import web
 from telegram import Update, InputFile, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, CallbackQueryHandler, filters
-from datetime import datetime, timedelta
+from telegram.ext import (
+    Application, CommandHandler, MessageHandler,
+    ContextTypes, CallbackQueryHandler, filters
+)
 
-# ✅ إزالة التشكيل والهمزات والنormalization
+# ---------------------------
+# 🔤 تطبيع النص (إزالة التشكيل والهمزات)
+# ---------------------------
 def normalize(text):
     text = unicodedata.normalize("NFKD", text)
     text = ''.join([c for c in text if not unicodedata.combining(c)])
     text = text.replace("أ", "ا").replace("إ", "ا").replace("آ", "ا").replace("ة", "ه")
     return text.lower().strip()
 
-# ✅ قاعدة بيانات الكتب
+# ---------------------------
+# 📚 قاعدة بيانات الكتب
+# ---------------------------
 FILES = {
     "العقيدة الواسطية": "files/العقيدة_الواسطية.pdf",
     "القواعد الأربعة محمد بن عبد الوهاب": "files/القواعد_الأربعة_محمد_بن_عبد_الوهاب.pdf",
@@ -24,7 +31,9 @@ FILES = {
     "خلاصة تعظيم العلم صالح العصيمي": "files/خلاصة_تعظيم_العلم_صالح_العصيمي.pdf"
 }
 
+# ---------------------------
 # ⏳ حماية من السبام
+# ---------------------------
 last_message_time = {}
 
 def is_spam(user_id):
@@ -35,24 +44,34 @@ def is_spam(user_id):
     last_message_time[user_id] = now
     return False
 
+# ---------------------------
 # 🔍 البحث الذكي
+# ---------------------------
 def smart_search(query):
     norm_query = normalize(query)
     norm_titles = {normalize(title): title for title in FILES}
+    
+    # بحث مباشر
     exact_matches = [original for norm, original in norm_titles.items() if norm_query in norm]
     if exact_matches:
         return exact_matches[0]
+    
+    # بحث تقريبي
     close_matches = difflib.get_close_matches(norm_query, norm_titles.keys(), n=1, cutoff=0.5)
     return norm_titles[close_matches[0]] if close_matches else None
 
-# 📥 التعامل مع الرسائل
+# ---------------------------
+# 📥 استقبال الرسائل والرد بالكتب
+# ---------------------------
 async def send_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if is_spam(user_id):
         await update.message.reply_text("⌛ الرجاء الانتظار بضع ثوانٍ قبل إرسال رسالة جديدة.")
         return
+    
     query = update.message.text
     match = smart_search(query)
+
     if match:
         file_path = FILES[match]
         await update.message.reply_text(f"📘 تم العثور على: {match}")
@@ -61,57 +80,71 @@ async def send_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("❌ لم يتم العثور على الكتاب. تأكد من كتابة الاسم بشكل صحيح.")
 
-# ✅ أمر /start مع زر "📚 عرض الكتب"
+# ---------------------------
+# ✅ أمر /start
+# ---------------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if is_spam(user_id):
         await update.message.reply_text("⌛ الرجاء الانتظار بضع ثوانٍ قبل استخدام الأمر مرة أخرى.")
         return
+
     username = update.effective_user.first_name or "أخي الكريم"
-    keyboard = [
-        [InlineKeyboardButton("📚 عرض الكتب", callback_data="show_books")]
-    ]
+    keyboard = [[InlineKeyboardButton("📚 عرض الكتب", callback_data="show_books")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
+
     await update.message.reply_text(
         f"السلام عليكم ورحمة الله وبركاته، {username} 🌿\n"
         "قال رسول الله ﷺ:\n"
         "«من صلى عليَّ صلاة، صلى الله عليه بها عشرًا» (رواه مسلم)\n\n"
         "🌟 لا تحرم نفسك من هذا الأجر، صلِّ على النبي ﷺ.\n\n"
-        "أرسل اسم الكتاب للحصول على نسخه PDF.\n"
-        "أو اضغط على الزر أدناه لعرض قائمة الكتب المتوفرة ⬇",
+        "✍ أرسل اسم الكتاب للحصول على نسخة PDF، أو اضغط على الزر أدناه لعرض جميع الكتب ⬇",
         reply_markup=reply_markup
     )
 
-# ✅ أمر /books لعرض الكتب
+# ---------------------------
+# 📖 أمر /books لعرض الكتب
+# ---------------------------
 async def list_books(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if is_spam(user_id):
         await update.message.reply_text("⌛ الرجاء الانتظار قبل استخدام الأمر مرة أخرى.")
         return
+
     books = "\n".join([f"{i+1}⃣ {title}" for i, title in enumerate(FILES.keys())])
     await update.message.reply_text(f"📚 الكتب المتوفرة:\n\n{books}\n\n✍ أرسل اسم الكتاب كما هو أو قريبًا منه.")
 
+# ---------------------------
 # 🔘 عند الضغط على زر "📚 عرض الكتب"
+# ---------------------------
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = query.from_user.id
+
     if is_spam(user_id):
         await query.answer("⌛ الرجاء الانتظار قبل إعادة الضغط.", show_alert=True)
         return
+
     await query.answer()
+
     if query.data == "show_books":
         books = "\n".join([f"{i+1}⃣ {title}" for i, title in enumerate(FILES.keys())])
         await query.edit_message_text(f"📚 الكتب المتوفرة:\n\n{books}\n\n✍ أرسل اسم الكتاب كما هو أو قريبًا منه.")
 
-# ✅ إعداد التطبيق
+# ---------------------------
+# 🛠 إعداد التطبيق
+# ---------------------------
 TOKEN = os.getenv("BOT_TOKEN")
 application = Application.builder().token(TOKEN).build()
+
 application.add_handler(CommandHandler("start", start))
 application.add_handler(CommandHandler("books", list_books))
 application.add_handler(CallbackQueryHandler(button_handler))
 application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, send_file))
 
-# ✅ Webhook
+# ---------------------------
+# 🌐 Webhook
+# ---------------------------
 async def handle_webhook(request):
     data = await request.json()
     update = Update.de_json(data, application.bot)
