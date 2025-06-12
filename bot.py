@@ -46,9 +46,15 @@ async def send_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("❌ لم يتم العثور على الكتاب. تأكد من كتابة الاسم بشكل صحيح.")
 
-# /start
+# ✅ رسالة /start الجديدة
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("مرحبًا بك في البوت الإسلامي 🌙\nأرسل اسم الكتاب للحصول على نسخه PDF.")
+    await update.message.reply_text(
+        "السلام عليكم ورحمة الله وبركاته 🌿\n"
+        "قال رسول الله ﷺ:\n"
+        "«من صلى عليَّ صلاة، صلى الله عليه بها عشرًا» (رواه مسلم)\n\n"
+        "🌟 لا تحرم نفسك من هذا الأجر، صلِّ على النبي ﷺ.\n\n"
+        "أرسل اسم الكتاب للحصول على نسخه PDF."
+    )
 
 # إعداد التطبيق
 TOKEN = os.getenv("BOT_TOKEN")
