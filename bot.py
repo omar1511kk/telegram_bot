@@ -1,6 +1,7 @@
 import os
 import difflib
 import unicodedata
+import time
 from aiohttp import web
 from telegram import Update, InputFile, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, CallbackQueryHandler, filters
@@ -33,8 +34,18 @@ def smart_search(query):
     close_matches = difflib.get_close_matches(norm_query, norm_titles.keys(), n=1, cutoff=0.5)
     return norm_titles[close_matches[0]] if close_matches else None
 
-# 📥 التعامل مع الرسائل
+# 📥 التعامل مع الرسائل (مع حماية من السبام)
 async def send_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    now = time.time()
+    last_time = context.user_data.get("last_request_time", 0)
+
+    if now - last_time < 5:  # أقل من 5 ثوانٍ
+        await update.message.reply_text("⏳ الرجاء الانتظار قليلاً قبل طلب كتاب آخر.")
+        return
+
+    context.user_data["last_request_time"] = now
+
     query = update.message.text
     match = smart_search(query)
     if match:
@@ -67,10 +78,20 @@ async def list_books(update: Update, context: ContextTypes.DEFAULT_TYPE):
     books = "\n".join([f"{i+1}⃣ {title}" for i, title in enumerate(FILES.keys())])
     await update.message.reply_text(f"📚 الكتب المتوفرة:\n\n{books}\n\n✍ أرسل اسم الكتاب كما هو أو قريبًا منه.")
 
-# 🔘 رد على ضغط زر "عرض الكتب"
+# 🔘 رد على ضغط زر "عرض الكتب" مع حماية سبام
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    user_id = query.from_user.id
+    now = time.time()
+    last_click = context.user_data.get("last_button_time", 0)
+
+    if now - last_click < 5:
+        await query.answer("⏳ انتظر قليلًا قبل الضغط مرة أخرى.", show_alert=False)
+        return
+
+    context.user_data["last_button_time"] = now
     await query.answer()
+
     if query.data == "show_books":
         books = "\n".join([f"{i+1}⃣ {title}" for i, title in enumerate(FILES.keys())])
         await query.edit_message_text(f"📚 الكتب المتوفرة:\n\n{books}\n\n✍ أرسل اسم الكتاب كما هو أو قريبًا منه.")
