@@ -13,21 +13,22 @@ from telegram.ext import (
     CallbackQueryHandler,
     filters
 )
+from aladhan import Aladhan
+from datetime import datetime
 
 # ✅ إنشاء قاعدة البيانات وتخزين الدولة لكل مستخدم
 def init_db():
     conn = sqlite3.connect("users.db")
     cursor = conn.cursor()
     cursor.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            user_id INTEGER PRIMARY KEY,
-            country TEXT
-        )
+    CREATE TABLE IF NOT EXISTS users (
+        user_id INTEGER PRIMARY KEY,
+        country TEXT
+    )
     """)
     conn.commit()
     conn.close()
 
-# ✅ حفظ الدولة للمستخدم
 def save_user_country(user_id, country):
     conn = sqlite3.connect("users.db")
     cursor = conn.cursor()
@@ -35,7 +36,15 @@ def save_user_country(user_id, country):
     conn.commit()
     conn.close()
 
-# ✅ قائمة الدول (العربية) مع استبدال علم سوريا بدائرة خضراء فقط
+def get_user_country(user_id):
+    conn = sqlite3.connect("users.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT country FROM users WHERE user_id = ?", (user_id,))
+    result = cursor.fetchone()
+    conn.close()
+    return result[0] if result else None
+
+# ✅ قائمة الدول (العربية)
 COUNTRIES = [
     "🇸🇦 السعودية", "🇪🇬 مصر", "🇩🇿 الجزائر", "🇲🇦 المغرب", "🇸🇩 السودان",
     "🇮🇶 العراق", "🟢 سوريا", "🇯🇴 الأردن", "🇹🇳 تونس", "🇰🇼 الكويت",
@@ -43,7 +52,7 @@ COUNTRIES = [
     "🇴🇲 عمان", "🇾🇪 اليمن", "🇱🇾 ليبيا", "🇲🇷 موريتانيا", "🇸🇴 الصومال"
 ]
 
-# إعدادات عامة
+# ✅ إعدادات عامة
 TOKEN = os.getenv("BOT_TOKEN")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 ADMIN_ID = 5650658004
@@ -79,7 +88,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     keyboard = [
         [InlineKeyboardButton("📚 عرض الكتب", callback_data="show_books")],
-        [InlineKeyboardButton("🌍 تغيير الدولة", callback_data="choose_country")]
+        [InlineKeyboardButton("🌍 تغيير الدولة", callback_data="choose_country")],
+        [InlineKeyboardButton("🕌 مواقيت الصلاة", callback_data="prayer_times")]
     ]
 
     if user_id == ADMIN_ID:
@@ -129,17 +139,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(f"📚 الكتب المتوفرة:\n\n{books}")
 
     elif data == "choose_country":
-        keyboard = []
-        row = []
-        for i, country in enumerate(COUNTRIES, 1):
-            row.append(InlineKeyboardButton(country, callback_data=f"set_{country}"))
-            if i % 2 == 0:
-                keyboard.append(row)
-                row = []
-        if row:
-            keyboard.append(row)
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text("🌍 اختر دولتك من القائمة:", reply_markup=reply_markup)
+        await set_country(update, context)
 
     elif data.startswith("set_"):
         country = data[4:]
@@ -148,9 +148,35 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == "add_book" and user_id == ADMIN_ID:
         await query.edit_message_text("📥 أرسل الآن ملف PDF الذي تريد إضافته. اسم الملف سيكون عنوان الكتاب.")
-    
+
     elif data == "delete_book" and user_id == ADMIN_ID:
         await query.edit_message_text("🗑 أرسل الآن اسم الكتاب الذي تريد حذفه باستخدام الأمر:\n`/delete اسم الكتاب`", parse_mode="Markdown")
+
+    elif data == "prayer_times":
+        await send_prayer_times(update, context)
+
+async def send_prayer_times(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    country = get_user_country(user_id)
+    if not country:
+        await update.callback_query.edit_message_text("❗ الرجاء اختيار دولتك أولًا عبر الزر 🌍 تغيير الدولة.")
+        return
+
+    # إزالة الرموز التعبيرية (العلم)
+    country_name = country.split(" ", 1)[1]
+
+    client = Aladhan()
+    today = datetime.today().strftime('%Y-%m-%d')
+    timings = client.get_timings_by_address(today, address=country_name, method=2).get('data', {}).get('timings', {})
+
+    if not timings:
+        await update.callback_query.edit_message_text("❌ لم أتمكن من جلب المواقيت. تأكد من اختيار دولة صحيحة.")
+        return
+
+    message = f"🕌 مواقيت الصلاة اليوم في {country_name}:\n\n"
+    message += "\n".join([f"• {name}: {time}" for name, time in timings.items() if name in ["Fajr", "Dhuhr", "Asr", "Maghrib", "Isha"]])
+
+    await update.callback_query.edit_message_text(message, parse_mode="Markdown")
 
 async def send_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     now = time.time()
