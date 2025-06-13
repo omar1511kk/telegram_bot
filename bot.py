@@ -104,23 +104,28 @@ application.add_handler(CommandHandler("books", list_books))
 application.add_handler(CallbackQueryHandler(button_handler))
 application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, send_file))
 
-# Webhook
+# ✅ Webhook
 async def handle_webhook(request):
     data = await request.json()
     update = Update.de_json(data, application.bot)
     await application.process_update(update)
     return web.Response()
 
-# بدء التطبيق مع Webhook
+# ✅ صفحة "/" لرد 200 إلى UptimeRobot
+async def handle_home(request):
+    return web.Response(text="✅ Bot is running", status=200)
+
+# ✅ بدء التطبيق
 async def on_startup(app):
     webhook_url = os.getenv("WEBHOOK_URL")
     await application.bot.set_webhook(webhook_url)
     await application.initialize()
     await application.start()
 
-# إعداد خادم الويب
+# ✅ إعداد الخادم
 web_app = web.Application()
 web_app.router.add_post("/webhook", handle_webhook)
+web_app.router.add_get("/", handle_home)  # <-- هذا السطر يُقنع UptimeRobot أن البوت يعمل
 web_app.on_startup.append(on_startup)
 
 if __name__ == "__main__":
