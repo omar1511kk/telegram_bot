@@ -115,7 +115,7 @@ async def send_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("❌ لم يتم العثور على الكتاب. تأكد من كتابة الاسم بشكل صحيح.")
 
-# إضافة كتاب (للأدمن فقط)
+# ✅ إضافة كتاب (للأدمن فقط) — تم تصحيح await هنا
 async def add_book(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("🚫 هذا الأمر مخصص للمشرف فقط.")
@@ -129,7 +129,9 @@ async def add_book(update: Update, context: ContextTypes.DEFAULT_TYPE):
     title = doc.file_name.replace("_", " ").replace(".pdf", "")
     file_path = f"files/{doc.file_name}"
 
-    await doc.get_file().download_to_drive(file_path)
+    file = await doc.get_file()
+    await file.download_to_drive(file_path)
+
     FILES[title] = file_path
     await update.message.reply_text(f"✅ تم إضافة الكتاب: {title}")
 
