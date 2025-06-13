@@ -2,6 +2,7 @@ import os
 import difflib
 import unicodedata
 import time
+import sqlite3
 from aiohttp import web
 from telegram import Update, InputFile, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -13,12 +14,40 @@ from telegram.ext import (
     filters
 )
 
+# ✅ إنشاء قاعدة البيانات وتخزين الدولة لكل مستخدم
+def init_db():
+    conn = sqlite3.connect("users.db")
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            user_id INTEGER PRIMARY KEY,
+            country TEXT
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+# ✅ حفظ الدولة للمستخدم
+def save_user_country(user_id, country):
+    conn = sqlite3.connect("users.db")
+    cursor = conn.cursor()
+    cursor.execute("INSERT OR REPLACE INTO users (user_id, country) VALUES (?, ?)", (user_id, country))
+    conn.commit()
+    conn.close()
+
+# ✅ قائمة الدول (العربية) مع استبدال علم سوريا بدائرة خضراء فقط
+COUNTRIES = [
+    "🇸🇦 السعودية", "🇪🇬 مصر", "🇩🇿 الجزائر", "🇲🇦 المغرب", "🇸🇩 السودان",
+    "🇮🇶 العراق", "🟢 سوريا", "🇯🇴 الأردن", "🇹🇳 تونس", "🇰🇼 الكويت",
+    "🇵🇸 فلسطين", "🇱🇧 لبنان", "🇶🇦 قطر", "🇧🇭 البحرين", "🇦🇪 الإمارات",
+    "🇴🇲 عمان", "🇾🇪 اليمن", "🇱🇾 ليبيا", "🇲🇷 موريتانيا", "🇸🇴 الصومال"
+]
+
 # إعدادات عامة
 TOKEN = os.getenv("BOT_TOKEN")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
-ADMIN_ID = 5650658004  # 👑 معرّف الأدمن
+ADMIN_ID = 5650658004
 
-# قاعدة بيانات الكتب (عنوان: مسار PDF)
 FILES = {
     "العقيدة الواسطية": "files/العقيدة_الواسطية.pdf",
     "القواعد الأربعة محمد بن عبد الوهاب": "files/القواعد_الأربعة_محمد_بن_عبد_الوهاب.pdf",
@@ -29,14 +58,12 @@ FILES = {
     "خلاصة تعظيم العلم صالح العصيمي": "files/خلاصة_تعظيم_العلم_صالح_العصيمي.pdf"
 }
 
-# إزالة التشكيل والهمزات لتسهيل البحث
 def normalize(text):
     text = unicodedata.normalize("NFKD", text)
     text = ''.join([c for c in text if not unicodedata.combining(c)])
     text = text.replace("أ", "ا").replace("إ", "ا").replace("آ", "ا").replace("ة", "ه")
     return text.lower().strip()
 
-# البحث الذكي عن الكتب
 def smart_search(query):
     norm_query = normalize(query)
     norm_titles = {normalize(title): title for title in FILES}
@@ -46,16 +73,15 @@ def smart_search(query):
     close_matches = difflib.get_close_matches(norm_query, norm_titles.keys(), n=1, cutoff=0.5)
     return norm_titles[close_matches[0]] if close_matches else None
 
-# ✅ أمر /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     username = update.effective_user.first_name or "أخي الكريم"
     user_id = update.effective_user.id
 
     keyboard = [
-        [InlineKeyboardButton("📚 عرض الكتب", callback_data="show_books")]
+        [InlineKeyboardButton("📚 عرض الكتب", callback_data="show_books")],
+        [InlineKeyboardButton("🌍 تغيير الدولة", callback_data="choose_country")]
     ]
 
-    # زر خاص للأدمن
     if user_id == ADMIN_ID:
         keyboard.append([
             InlineKeyboardButton("➕ إضافة كتاب (اضغط هنا)", callback_data="add_book"),
@@ -73,12 +99,24 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=reply_markup
     )
 
-# عرض قائمة الكتب
+async def set_country(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = []
+    row = []
+    for i, country in enumerate(COUNTRIES, 1):
+        row.append(InlineKeyboardButton(country, callback_data=f"set_{country}"))
+        if i % 2 == 0:
+            keyboard.append(row)
+            row = []
+    if row:
+        keyboard.append(row)
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text("🌍 اختر دولتك من القائمة:", reply_markup=reply_markup)
+
 async def list_books(update: Update, context: ContextTypes.DEFAULT_TYPE):
     books = "\n".join([f"{i+1}⃣ {title}" for i, title in enumerate(FILES)])
     await update.message.reply_text(f"📚 الكتب المتوفرة:\n\n{books}")
 
-# الرد على ضغط الأزرار
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = query.from_user.id
@@ -90,13 +128,30 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         books = "\n".join([f"{i+1}⃣ {title}" for i, title in enumerate(FILES)])
         await query.edit_message_text(f"📚 الكتب المتوفرة:\n\n{books}")
 
+    elif data == "choose_country":
+        keyboard = []
+        row = []
+        for i, country in enumerate(COUNTRIES, 1):
+            row.append(InlineKeyboardButton(country, callback_data=f"set_{country}"))
+            if i % 2 == 0:
+                keyboard.append(row)
+                row = []
+        if row:
+            keyboard.append(row)
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text("🌍 اختر دولتك من القائمة:", reply_markup=reply_markup)
+
+    elif data.startswith("set_"):
+        country = data[4:]
+        save_user_country(user_id, country)
+        await query.edit_message_text(f"✅ تم تعيين دولتك: {country}")
+
     elif data == "add_book" and user_id == ADMIN_ID:
         await query.edit_message_text("📥 أرسل الآن ملف PDF الذي تريد إضافته. اسم الملف سيكون عنوان الكتاب.")
     
     elif data == "delete_book" and user_id == ADMIN_ID:
         await query.edit_message_text("🗑 أرسل الآن اسم الكتاب الذي تريد حذفه باستخدام الأمر:\n`/delete اسم الكتاب`", parse_mode="Markdown")
 
-# إرسال الكتاب عند الطلب
 async def send_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     now = time.time()
     last_time = context.user_data.get("last_request_time", 0)
@@ -115,7 +170,6 @@ async def send_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("❌ لم يتم العثور على الكتاب. تأكد من كتابة الاسم بشكل صحيح.")
 
-# ✅ إضافة كتاب (للأدمن فقط) — تم تصحيح await هنا
 async def add_book(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("🚫 هذا الأمر مخصص للمشرف فقط.")
@@ -135,7 +189,6 @@ async def add_book(update: Update, context: ContextTypes.DEFAULT_TYPE):
     FILES[title] = file_path
     await update.message.reply_text(f"✅ تم إضافة الكتاب: {title}")
 
-# حذف كتاب (للأدمن فقط)
 async def delete_book(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("🚫 هذا الأمر مخصص للمشرف فقط.")
@@ -153,16 +206,15 @@ async def delete_book(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("❌ لم يتم العثور على الكتاب.")
 
-# إعداد التطبيق
 application = Application.builder().token(TOKEN).build()
 application.add_handler(CommandHandler("start", start))
 application.add_handler(CommandHandler("books", list_books))
 application.add_handler(CommandHandler("delete", delete_book))
+application.add_handler(CommandHandler("setcountry", set_country))
 application.add_handler(CallbackQueryHandler(button_handler))
 application.add_handler(MessageHandler(filters.Document.PDF, add_book))
 application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, send_file))
 
-# Webhook و UptimeRobot
 async def handle_webhook(request):
     data = await request.json()
     update = Update.de_json(data, application.bot)
@@ -173,11 +225,11 @@ async def handle_home(request):
     return web.Response(text="✅ Bot is running", status=200)
 
 async def on_startup(app):
+    init_db()
     await application.bot.set_webhook(WEBHOOK_URL)
     await application.initialize()
     await application.start()
 
-# خادم aiohttp
 web_app = web.Application()
 web_app.router.add_post("/webhook", handle_webhook)
 web_app.router.add_get("/", handle_home)
