@@ -3,6 +3,7 @@ import difflib
 import unicodedata
 import time
 import sqlite3
+import requests
 from aiohttp import web
 from telegram import Update, InputFile, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -13,7 +14,6 @@ from telegram.ext import (
     CallbackQueryHandler,
     filters
 )
-from aladhan import Aladhan
 from datetime import datetime
 
 # ✅ إنشاء قاعدة البيانات وتخزين الدولة لكل مستخدم
@@ -158,25 +158,38 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def send_prayer_times(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     country = get_user_country(user_id)
+
     if not country:
         await update.callback_query.edit_message_text("❗ الرجاء اختيار دولتك أولًا عبر الزر 🌍 تغيير الدولة.")
         return
 
-    # إزالة الرموز التعبيرية (العلم)
     country_name = country.split(" ", 1)[1]
+    today = datetime.now().strftime("%d-%m-%Y")
 
-    client = Aladhan()
-    today = datetime.today().strftime('%Y-%m-%d')
-    timings = client.get_timings_by_address(today, address=country_name, method=2).get('data', {}).get('timings', {})
+    url = f"http://api.aladhan.com/v1/timingsByAddress/{today}?address={country_name}&method=2"
 
-    if not timings:
-        await update.callback_query.edit_message_text("❌ لم أتمكن من جلب المواقيت. تأكد من اختيار دولة صحيحة.")
-        return
+    try:
+        response = requests.get(url)
+        data = response.json()
 
-    message = f"🕌 مواقيت الصلاة اليوم في {country_name}:\n\n"
-    message += "\n".join([f"• {name}: {time}" for name, time in timings.items() if name in ["Fajr", "Dhuhr", "Asr", "Maghrib", "Isha"]])
+        if data["code"] != 200 or "data" not in data:
+            raise Exception("Invalid response")
 
-    await update.callback_query.edit_message_text(message, parse_mode="Markdown")
+        timings = data["data"]["timings"]
+
+        message = f"🕌 مواقيت الصلاة اليوم في {country_name}:\n\n"
+        message += "\n".join([
+            f"• الفجر: {timings['Fajr']}",
+            f"• الظهر: {timings['Dhuhr']}",
+            f"• العصر: {timings['Asr']}",
+            f"• المغرب: {timings['Maghrib']}",
+            f"• العشاء: {timings['Isha']}"
+        ])
+
+        await update.callback_query.edit_message_text(message, parse_mode="Markdown")
+
+    except Exception:
+        await update.callback_query.edit_message_text("❌ حدث خطأ أثناء جلب المواقيت. تأكد من اختيار دولة صحيحة أو حاول لاحقًا.")
 
 async def send_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     now = time.time()
