@@ -5,36 +5,25 @@ import time
 import sqlite3
 import hashlib
 
-from aiohttp import web
 from telegram import Update, InputFile, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
     ContextTypes, CallbackQueryHandler, filters
 )
 
-# ✅ إعداد قواعد البيانات
-def init_db():
-    # قاعدة بيانات المستخدمين
-    conn = sqlite3.connect("users.db")
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            user_id INTEGER PRIMARY KEY,
-            country TEXT
-        )
-    """)
-    conn.commit()
-    conn.close()
+TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_ID = 5650658004
 
-    # قاعدة بيانات الكتب
+# ✅ إنشاء قاعدة بيانات الكتب
+def init_db():
     conn = sqlite3.connect("books.db")
     cursor = conn.cursor()
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS books (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            author TEXT,
-            title TEXT,
-            file_path TEXT
+            author TEXT NOT NULL,
+            title TEXT NOT NULL,
+            file_path TEXT NOT NULL
         )
     """)
     conn.commit()
@@ -45,78 +34,77 @@ def load_books():
     conn = sqlite3.connect("books.db")
     cursor = conn.cursor()
     cursor.execute("SELECT author, title, file_path FROM books")
-    rows = cursor.fetchall()
-    conn.close()
-
     books = {}
-    for author, title, path in rows:
-        if author not in books:
-            books[author] = {}
-        books[author][title] = path
+    for author, title, path in cursor.fetchall():
+        books.setdefault(author, {})[title] = path
+    conn.close()
     return books
 
-FILES = load_books()
+# ✅ حفظ كتاب جديد في قاعدة البيانات
+def save_book(author, title, file_path):
+    conn = sqlite3.connect("books.db")
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO books (author, title, file_path) VALUES (?, ?, ?)", (author, title, file_path))
+    conn.commit()
+    conn.close()
 
-# ✅ إعدادات عامة
-TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = 5650658004  # 👑 معرف الأدمن
+# ✅ حذف كتاب من قاعدة البيانات
+def remove_book(author, title):
+    conn = sqlite3.connect("books.db")
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM books WHERE author = ? AND title = ?", (author, title))
+    conn.commit()
+    conn.close()
 
-# ✅ إزالة التشكيل والهمزات لتسهيل البحث
+# ✅ تنسيق النصوص للبحث الذكي
 def normalize(text):
     text = unicodedata.normalize("NFKD", text)
     text = ''.join([c for c in text if not unicodedata.combining(c)])
     text = text.replace("أ", "ا").replace("إ", "ا").replace("آ", "ا").replace("ة", "ه")
     return text.lower().strip()
 
-# ✅ البحث الذكي عن الكتب
+# ✅ البحث الذكي
 def smart_search(query):
     norm_query = normalize(query)
-    flat_files = {
+    flat = {
         normalize(title): (author, title)
         for author, books in FILES.items()
         for title in books
     }
 
-    exact_matches = [original for norm, original in flat_files.items() if norm_query in norm]
-    if exact_matches:
-        return exact_matches[0]
+    exact = [original for norm, original in flat.items() if norm_query in norm]
+    if exact:
+        return exact[0]
 
-    close_matches = difflib.get_close_matches(norm_query, flat_files.keys(), n=1, cutoff=0.8)
-    return flat_files[close_matches[0]] if close_matches else None
+    close = difflib.get_close_matches(norm_query, flat.keys(), n=1, cutoff=0.8)
+    return flat[close[0]] if close else None
 
-# ✅ أمر /start
+# ✅ /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     username = update.effective_user.first_name or "أخي الكريم"
     user_id = update.effective_user.id
-
-    keyboard = [[InlineKeyboardButton(name, callback_data=f"author|{name}")] for name in FILES.keys()]
+    keyboard = [[InlineKeyboardButton(name, callback_data=f"author|{name}")] for name in FILES]
 
     if user_id == ADMIN_ID:
         keyboard.append([
-            InlineKeyboardButton("➕ إضافة كتاب (اضغط هنا)", callback_data="add_book"),
-            InlineKeyboardButton("🗑 حذف كتاب (اضغط هنا)", callback_data="delete_book")
+            InlineKeyboardButton("➕ إضافة كتاب", callback_data="add_book"),
+            InlineKeyboardButton("🗑 حذف كتاب", callback_data="delete_book")
         ])
-
-    reply_markup = InlineKeyboardMarkup(keyboard)
 
     await update.message.reply_text(
         f"السلام عليكم ورحمة الله وبركاته، {username} 🌿\n"
-        "قال رسول الله ﷺ:\n"
-        "«من صلى عليَّ صلاة، صلى الله عليه بها عشرًا» (رواه مسلم)\n\n"
-        "🌟 لا تحرم نفسك من هذا الأجر، صلِّ على النبي ﷺ.\n\n"
-        "✍ أرسل اسم الكتاب للحصول على نسخه PDF، أو اضغط على أحد الأزرار أدناه ⬇",
-        reply_markup=reply_markup
+        "✍ أرسل اسم الكتاب أو اختر من الأزرار:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
 # ✅ عرض كتب عالم معين
 async def show_books_by_author(update: Update, context: ContextTypes.DEFAULT_TYPE, author):
     books = FILES.get(author, {})
     if not books:
-        await update.callback_query.edit_message_text("❌ لا توجد كتب لهذا العالم حاليًا.")
+        await update.callback_query.edit_message_text("❌ لا توجد كتب لهذا العالم.")
         return
 
-    buttons = []
-    row = []
+    buttons, row = [], []
     for title in books:
         book_id = hashlib.md5(f"{author}|{title}".encode()).hexdigest()
         context.chat_data[book_id] = (author, title)
@@ -131,7 +119,7 @@ async def show_books_by_author(update: Update, context: ContextTypes.DEFAULT_TYP
         f"📚 كتب {author}:", reply_markup=InlineKeyboardMarkup(buttons)
     )
 
-# ✅ الرد على ضغط الأزرار
+# ✅ ضغط الأزرار
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = query.from_user.id
@@ -154,72 +142,51 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text("❌ لم يتم العثور على الكتاب.")
 
     elif data == "add_book" and user_id == ADMIN_ID:
-        await query.edit_message_text("📥 أرسل الآن ملف PDF الذي تريد إضافته. اسمه يجب أن يكون: اسم_العالم - اسم_الكتاب.pdf")
+        await query.edit_message_text("📥 أرسل ملف PDF بصيغة: اسم_العالم - اسم_الكتاب.pdf")
 
     elif data == "delete_book" and user_id == ADMIN_ID:
-        await query.edit_message_text("🗑 أرسل الآن اسم الكتاب الذي تريد حذفه باستخدام الأمر:\n/delete اسم الكتاب", parse_mode="Markdown")
+        await query.edit_message_text("🗑 أرسل اسم الكتاب لحذفه باستخدام:\n/delete اسم الكتاب")
 
-# ✅ إرسال الكتاب عند الطلب
+# ✅ إرسال ملف عند طلبه
 async def send_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    now = time.time()
-    last_time = context.user_data.get("last_request_time", 0)
-    if now - last_time < 5:
-        await update.message.reply_text("⏳ الرجاء الانتظار قليلاً قبل طلب كتاب آخر.")
-        return
-
-    context.user_data["last_request_time"] = now
     query = update.message.text
     result = smart_search(query)
 
     if result:
         author, title = result
         file_path = FILES[author][title]
-        await update.message.reply_text(f"📘 تم العثور على: {title}\n👤 المؤلف: {author}")
+        await update.message.reply_text(f"📘 {title}\n👤 المؤلف: {author}")
         with open(file_path, "rb") as f:
             await update.message.reply_document(InputFile(f, filename=os.path.basename(file_path)))
     else:
-        await update.message.reply_text("❌ لم يتم العثور على الكتاب. تأكد من كتابة الاسم بشكل صحيح.")
+        await update.message.reply_text("❌ لم يتم العثور على الكتاب.")
 
 # ✅ إضافة كتاب
 async def add_book(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("🚫 هذا الأمر مخصص للمشرف فقط.")
-        return
-
-    if not update.message.document:
-        await update.message.reply_text("📎 أرسل ملف PDF مع العنوان بهذا الشكل: اسم_العالم - اسم_الكتاب.pdf")
-        return
+        return await update.message.reply_text("🚫 هذا الأمر للأدمن فقط.")
 
     doc = update.message.document
+    if not doc or not doc.file_name.endswith(".pdf"):
+        return await update.message.reply_text("📎 أرسل ملف PDF بصيغة: اسم_العالم - اسم_الكتاب.pdf")
+
     name = doc.file_name.replace(".pdf", "")
     if "-" not in name:
-        await update.message.reply_text("❗ اسم الملف غير صحيح. يجب أن يكون بصيغة: اسم_العالم - اسم_الكتاب.pdf")
-        return
+        return await update.message.reply_text("❗ اسم الملف يجب أن يكون: اسم_العالم - اسم_الكتاب.pdf")
 
     author, title = [part.strip().replace("_", " ") for part in name.split("-", 1)]
     file_path = f"files/{doc.file_name}"
     file = await doc.get_file()
     await file.download_to_drive(file_path)
 
-    # حفظ في FILES
-    if author not in FILES:
-        FILES[author] = {}
-    FILES[author][title] = file_path
-
-    # حفظ في قاعدة البيانات
-    conn = sqlite3.connect("books.db")
-    cursor = conn.cursor()
-    cursor.execute("INSERT INTO books (author, title, file_path) VALUES (?, ?, ?)", (author, title, file_path))
-    conn.commit()
-    conn.close()
-
-    await update.message.reply_text(f"✅ تم إضافة الكتاب: {title}\n👤 المؤلف: {author}")
+    save_book(author, title, file_path)
+    FILES.setdefault(author, {})[title] = file_path
+    await update.message.reply_text(f"✅ تم إضافة: {title}\n👤 {author}")
 
 # ✅ حذف كتاب
 async def delete_book(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("🚫 هذا الأمر مخصص للمشرف فقط.")
-        return
+        return await update.message.reply_text("🚫 هذا الأمر للأدمن فقط.")
 
     title = " ".join(context.args)
     result = smart_search(title)
@@ -230,19 +197,12 @@ async def delete_book(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except FileNotFoundError:
             pass
         del FILES[author][real_title]
-
-        # حذف من قاعدة البيانات
-        conn = sqlite3.connect("books.db")
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM books WHERE author = ? AND title = ?", (author, real_title))
-        conn.commit()
-        conn.close()
-
-        await update.message.reply_text(f"✅ تم حذف الكتاب: {real_title} (المؤلف: {author})")
+        remove_book(author, real_title)
+        await update.message.reply_text(f"✅ تم حذف الكتاب: {real_title}")
     else:
         await update.message.reply_text("❌ لم يتم العثور على الكتاب.")
 
-# ✅ تشغيل التطبيق
+# ✅ التشغيل
 def main():
     init_db()
     global FILES
