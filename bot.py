@@ -12,59 +12,63 @@ from telegram.ext import (
     ContextTypes, CallbackQueryHandler, filters
 )
 
-# ✅ إعداد قاعدة البيانات
+# ✅ إعداد قواعد البيانات
 def init_db():
+    # قاعدة بيانات المستخدمين
     conn = sqlite3.connect("users.db")
     cursor = conn.cursor()
-
-    # جدول المستخدمين
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
             country TEXT
         )
     """)
+    conn.commit()
+    conn.close()
 
-    # جدول الكتب
+    # قاعدة بيانات الكتب
+    conn = sqlite3.connect("books.db")
+    cursor = conn.cursor()
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS books (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
             author TEXT,
             title TEXT,
-            file_path TEXT,
-            PRIMARY KEY (author, title)
+            file_path TEXT
         )
     """)
-
     conn.commit()
     conn.close()
 
 # ✅ تحميل الكتب من قاعدة البيانات
-FILES = {}
 def load_books():
-    global FILES
-    FILES = {}
-    conn = sqlite3.connect("users.db")
+    conn = sqlite3.connect("books.db")
     cursor = conn.cursor()
     cursor.execute("SELECT author, title, file_path FROM books")
-    for author, title, path in cursor.fetchall():
-        if author not in FILES:
-            FILES[author] = {}
-        FILES[author][title] = path
+    rows = cursor.fetchall()
     conn.close()
+
+    books = {}
+    for author, title, path in rows:
+        if author not in books:
+            books[author] = {}
+        books[author][title] = path
+    return books
+
+FILES = load_books()
 
 # ✅ إعدادات عامة
 TOKEN = os.getenv("BOT_TOKEN")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 ADMIN_ID = 5650658004  # 👑 معرف الأدمن
 
-# ✅ تنظيف النصوص للبحث
+# ✅ إزالة التشكيل والهمزات لتسهيل البحث
 def normalize(text):
     text = unicodedata.normalize("NFKD", text)
     text = ''.join([c for c in text if not unicodedata.combining(c)])
     text = text.replace("أ", "ا").replace("إ", "ا").replace("آ", "ا").replace("ة", "ه")
     return text.lower().strip()
 
-# ✅ البحث الذكي
+# ✅ البحث الذكي عن الكتب
 def smart_search(query):
     norm_query = normalize(query)
     flat_files = {
@@ -80,20 +84,12 @@ def smart_search(query):
     close_matches = difflib.get_close_matches(norm_query, flat_files.keys(), n=1, cutoff=0.8)
     return flat_files[close_matches[0]] if close_matches else None
 
-# ✅ /start
+# ✅ أمر /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     username = update.effective_user.first_name or "أخي الكريم"
     user_id = update.effective_user.id
 
-    keyboard = []
-    row = []
-    for i, name in enumerate(FILES.keys(), start=1):
-        row.append(InlineKeyboardButton(name, callback_data=f"author|{name}"))
-        if i % 2 == 0:
-            keyboard.append(row)
-            row = []
-    if row:
-        keyboard.append(row)
+    keyboard = [[InlineKeyboardButton(name, callback_data=f"author|{name}")] for name in FILES.keys()]
 
     if user_id == ADMIN_ID:
         keyboard.append([
@@ -135,7 +131,7 @@ async def show_books_by_author(update: Update, context: ContextTypes.DEFAULT_TYP
         f"📚 كتب {author}:", reply_markup=InlineKeyboardMarkup(buttons)
     )
 
-# ✅ التعامل مع الأزرار
+# ✅ الرد على ضغط الأزرار
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = query.from_user.id
@@ -205,14 +201,15 @@ async def add_book(update: Update, context: ContextTypes.DEFAULT_TYPE):
     file = await doc.get_file()
     await file.download_to_drive(file_path)
 
+    # حفظ في FILES
     if author not in FILES:
         FILES[author] = {}
     FILES[author][title] = file_path
 
     # حفظ في قاعدة البيانات
-    conn = sqlite3.connect("users.db")
+    conn = sqlite3.connect("books.db")
     cursor = conn.cursor()
-    cursor.execute("REPLACE INTO books (author, title, file_path) VALUES (?, ?, ?)", (author, title, file_path))
+    cursor.execute("INSERT INTO books (author, title, file_path) VALUES (?, ?, ?)", (author, title, file_path))
     conn.commit()
     conn.close()
 
@@ -235,7 +232,7 @@ async def delete_book(update: Update, context: ContextTypes.DEFAULT_TYPE):
         del FILES[author][real_title]
 
         # حذف من قاعدة البيانات
-        conn = sqlite3.connect("users.db")
+        conn = sqlite3.connect("books.db")
         cursor = conn.cursor()
         cursor.execute("DELETE FROM books WHERE author = ? AND title = ?", (author, real_title))
         conn.commit()
@@ -245,18 +242,18 @@ async def delete_book(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("❌ لم يتم العثور على الكتاب.")
 
-# ✅ بدء التطبيق
+# ✅ تشغيل التطبيق
 def main():
     init_db()
-    load_books()
-    application = Application.builder().token(TOKEN).build()
+    global FILES
+    FILES = load_books()
 
+    application = Application.builder().token(TOKEN).build()
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("delete", delete_book))
     application.add_handler(CallbackQueryHandler(button_handler))
     application.add_handler(MessageHandler(filters.Document.PDF, add_book))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, send_file))
-
     application.run_polling()
 
 if __name__ == "__main__":
