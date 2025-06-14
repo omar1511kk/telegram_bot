@@ -12,45 +12,11 @@ from telegram.ext import (
     ContextTypes, CallbackQueryHandler, filters
 )
 
-# ✅ إعداد قاعدة البيانات لتخزين الدولة
-def init_db():
-    conn = sqlite3.connect("users.db")
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            user_id INTEGER PRIMARY KEY,
-            country TEXT
-        )
-    """)
-    conn.commit()
-    conn.close()
-
-# ✅ إعدادات عامة
 TOKEN = os.getenv("BOT_TOKEN")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
-ADMIN_ID = 5650658004  # 👑 معرف الأدمن
+ADMIN_ID = 5650658004
 
-# ✅ قاعدة بيانات الكتب مصنفة حسب العلماء
-FILES = {
-    "ابن تيمية": {
-        "العقيدة الواسطية": "files/العقيدة_الواسطية.pdf"
-    },
-    "محمد بن عبد الوهاب": {
-        "القواعد الأربعة": "files/القواعد_الأربعة_محمد_بن_عبد_الوهاب.pdf",
-        "ثلاثة الأصول وأدلتها": "files/محمد_بن_عبد_الوهاب_ثلاثة_الأصول_وأدلتها.pdf",
-        "كتاب التوحيد": "files/كتاب_التوحيد_محمد_بن_عبد_الوهاب.pdf"
-    },
-    "صالح العصيمي": {
-        "خلاصة تعظيم العلم": "files/خلاصة_تعظيم_العلم_صالح_العصيمي.pdf"
-    },
-    "ابن عثيمين": {
-        "شروط الصلاة، وأركانها، وواجباتها": "files/شروط_الصلاة_وأركانها_وواجباتها.pdf"
-    },
-    "صالح الفوزان": {
-        "نواقض الإسلام": "files/نواقض_الاسلام.pdf"
-    },
-    "ابن باز": {}
-}
+FILES = {}
 
 # ✅ إزالة التشكيل والهمزات لتسهيل البحث
 def normalize(text):
@@ -59,7 +25,46 @@ def normalize(text):
     text = text.replace("أ", "ا").replace("إ", "ا").replace("آ", "ا").replace("ة", "ه")
     return text.lower().strip()
 
-# ✅ البحث الذكي عن الكتب
+# ✅ إعداد قاعدة البيانات
+def init_db():
+    conn = sqlite3.connect("users.db")
+    cursor = conn.cursor()
+
+    # جدول المستخدمين (الدولة)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            user_id INTEGER PRIMARY KEY,
+            country TEXT
+        )
+    """)
+
+    # جدول الكتب
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS books (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            author TEXT NOT NULL,
+            title TEXT NOT NULL,
+            file_path TEXT NOT NULL
+        )
+    """)
+
+    conn.commit()
+    conn.close()
+
+# ✅ تحميل الكتب من قاعدة البيانات إلى FILES
+def load_books_from_db():
+    global FILES
+    FILES.clear()
+    conn = sqlite3.connect("users.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT author, title, file_path FROM books")
+    for author, title, file_path in cursor.fetchall():
+        if author not in FILES:
+            FILES[author] = {}
+        FILES[author][title] = file_path
+    conn.close()
+
+# ✅ البحث الذكي
 def smart_search(query):
     norm_query = normalize(query)
     flat_files = {
@@ -122,7 +127,7 @@ async def show_books_by_author(update: Update, context: ContextTypes.DEFAULT_TYP
         f"📚 كتب {author}:", reply_markup=InlineKeyboardMarkup(buttons)
     )
 
-# ✅ الرد على ضغط الأزرار
+# ✅ التعامل مع الأزرار
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = query.from_user.id
@@ -171,7 +176,7 @@ async def send_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("❌ لم يتم العثور على الكتاب. تأكد من كتابة الاسم بشكل صحيح.")
 
-# ✅ إضافة كتاب (للأدمن فقط)
+# ✅ إضافة كتاب
 async def add_book(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("🚫 هذا الأمر مخصص للمشرف فقط.")
@@ -192,12 +197,19 @@ async def add_book(update: Update, context: ContextTypes.DEFAULT_TYPE):
     file = await doc.get_file()
     await file.download_to_drive(file_path)
 
+    conn = sqlite3.connect("users.db")
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO books (author, title, file_path) VALUES (?, ?, ?)", (author, title, file_path))
+    conn.commit()
+    conn.close()
+
     if author not in FILES:
         FILES[author] = {}
     FILES[author][title] = file_path
+
     await update.message.reply_text(f"✅ تم إضافة الكتاب: {title}\n👤 المؤلف: {author}")
 
-# ✅ حذف كتاب (للأدمن فقط)
+# ✅ حذف كتاب
 async def delete_book(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("🚫 هذا الأمر مخصص للمشرف فقط.")
@@ -207,18 +219,30 @@ async def delete_book(update: Update, context: ContextTypes.DEFAULT_TYPE):
     result = smart_search(title)
     if result:
         author, real_title = result
+        file_path = FILES[author][real_title]
+
         try:
-            os.remove(FILES[author][real_title])
+            os.remove(file_path)
         except FileNotFoundError:
             pass
+
         del FILES[author][real_title]
+
+        conn = sqlite3.connect("users.db")
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM books WHERE author = ? AND title = ?", (author, real_title))
+        conn.commit()
+        conn.close()
+
         await update.message.reply_text(f"✅ تم حذف الكتاب: {real_title} (المؤلف: {author})")
     else:
         await update.message.reply_text("❌ لم يتم العثور على الكتاب.")
 
-# ✅ إعداد التطبيق
+# ✅ تشغيل التطبيق
 def main():
     init_db()
+    load_books_from_db()
+
     application = Application.builder().token(TOKEN).build()
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("delete", delete_book))
