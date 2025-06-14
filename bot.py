@@ -3,6 +3,7 @@ import difflib
 import unicodedata
 import time
 import sqlite3
+import urllib.parse  # ✅ لإصلاح مشكلة أسماء العلماء
 
 from aiohttp import web
 from telegram import Update, InputFile, InlineKeyboardButton, InlineKeyboardMarkup
@@ -81,7 +82,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     username = update.effective_user.first_name or "أخي الكريم"
     user_id = update.effective_user.id
 
-    keyboard = [[InlineKeyboardButton(name, callback_data=f"author_{name}")] for name in FILES.keys()]
+    keyboard = [[
+        InlineKeyboardButton(name, callback_data=f"author_{urllib.parse.quote(name)}")
+    ] for name in FILES.keys()]  # ✅ ترميز اسم العالم
 
     if user_id == ADMIN_ID:
         keyboard.append([
@@ -129,7 +132,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
 
     if data.startswith("author_"):
-        author = data.split("author_")[1]
+        author = urllib.parse.unquote(data.split("author_")[1])  # ✅ فك ترميز اسم العالم
         await show_books_by_author(update, context, author)
 
     elif data.startswith("book|"):
