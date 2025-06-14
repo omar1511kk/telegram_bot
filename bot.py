@@ -1,157 +1,248 @@
 import os
+import difflib
+import unicodedata
+import time
 import sqlite3
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
+from aiohttp import web
+from telegram import Update, InputFile, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    Application, CommandHandler, MessageHandler,
+    ContextTypes, CallbackQueryHandler, filters
+)
 
-# إعدادات البوت
-TOKEN = "ضع التوكن هنا"
-ADMIN_ID = 5650658004
+# ✅ إنشاء قاعدة البيانات وتخزين الدولة لكل مستخدم
+def init_db():
+    conn = sqlite3.connect("users.db")
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            user_id INTEGER PRIMARY KEY,
+            country TEXT
+        )
+    """)
+    conn.commit()
+    conn.close()
 
-# قاعدة البيانات للمستخدمين
-conn = sqlite3.connect("users.db", check_same_thread=False)
-c = conn.cursor()
-c.execute("""
-    CREATE TABLE IF NOT EXISTS users (
-        user_id INTEGER PRIMARY KEY,
-        country TEXT
-    )
-""")
-conn.commit()
+# إعدادات عامة
+TOKEN = os.getenv("BOT_TOKEN")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+ADMIN_ID = 5650658004  # 👑 معرّف الأدمن
 
-# تخزين الكتب
-FILES = {}  # {scholar: {title: filepath}}
-BOOKS = {}  # {book_id: (scholar, title)}
-BOOK_COUNTER = 0
+# ✅ قاعدة بيانات الكتب حسب العلماء
+FILES = {
+    "ابن تيمية": {
+        "العقيدة الواسطية": "files/العقيدة_الواسطية.pdf"
+    },
+    "محمد بن عبد الوهاب": {
+        "القواعد الأربعة": "files/القواعد_الأربعة_محمد_بن_عبد_الوهاب.pdf",
+        "ثلاثة الأصول وأدلتها": "files/محمد_بن_عبد_الوهاب_ثلاثة_الأصول_وأدلتها.pdf",
+        "كتاب التوحيد": "files/كتاب_التوحيد_محمد_بن_عبد_الوهاب.pdf"
+    },
+    "صالح العصيمي": {
+        "خلاصة تعظيم العلم": "files/خلاصة_تعظيم_العلم_صالح_العصيمي.pdf"
+    },
+    "ابن عثيمين": {
+        "شروط الصلاة، وأركانها، وواجباتها": "files/شروط_الصلاة_وأركانها_وواجباتها.pdf"
+    },
+    "صالح الفوزان": {
+        "نواقض الإسلام": "files/نواقض_الاسلام.pdf"
+    },
+    "ابن باز": {
+        # كتب ابن باز يمكن إضافتها لاحقًا
+    }
+}
 
-def get_book_id(scholar, title):
-    global BOOK_COUNTER
-    BOOK_COUNTER += 1
-    BOOKS[str(BOOK_COUNTER)] = (scholar, title)
-    return str(BOOK_COUNTER)
+# إزالة التشكيل والهمزات لتسهيل البحث
+def normalize(text):
+    text = unicodedata.normalize("NFKD", text)
+    text = ''.join([c for c in text if not unicodedata.combining(c)])
+    text = text.replace("أ", "ا").replace("إ", "ا").replace("آ", "ا").replace("ة", "ه")
+    return text.lower().strip()
 
-def load_books():
-    global BOOK_COUNTER
-    for root, dirs, files in os.walk("books"):
-        for file in files:
-            if file.endswith(".pdf"):
-                scholar = os.path.basename(root)
-                title = os.path.splitext(file)[0]
-                FILES.setdefault(scholar, {})[title] = os.path.join(root, file)
-                get_book_id(scholar, title)
+# البحث الذكي عن الكتب
+def smart_search(query):
+    norm_query = normalize(query)
+    flat_files = {
+        normalize(title): (author, title)
+        for author, books in FILES.items()
+        for title in books
+    }
+    exact_matches = [
+        original for norm, original in flat_files.items()
+        if norm_query in norm
+    ]
+    if exact_matches:
+        return exact_matches[0]
 
-def build_main_menu():
-    keyboard = [[InlineKeyboardButton(scholar, callback_data=f"s:{scholar}")] for scholar in FILES.keys()]
-    keyboard.append([InlineKeyboardButton("➕ إضافة كتاب", callback_data="add_book")])
-    return InlineKeyboardMarkup(keyboard)
+    close_matches = difflib.get_close_matches(norm_query, flat_files.keys(), n=1, cutoff=0.5)
+    return flat_files[close_matches[0]] if close_matches else None
 
-def build_books_menu(scholar, is_admin=False):
-    keyboard = []
-    for title in FILES[scholar].keys():
-        book_id = [k for k, v in BOOKS.items() if v == (scholar, title)][0]
-        keyboard.append([InlineKeyboardButton(title, callback_data=f"b:{book_id}")])
-    keyboard.append([InlineKeyboardButton("🔙 رجوع", callback_data="back")])
-    return InlineKeyboardMarkup(keyboard)
-
-# بدء البوت
+# ✅ أمر /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    username = update.effective_user.first_name or "أخي الكريم"
+    user_id = update.effective_user.id
+
+    keyboard = [[InlineKeyboardButton(name, callback_data=f"author_{name}")] for name in FILES.keys()]
+
+    if user_id == ADMIN_ID:
+        keyboard.append([
+            InlineKeyboardButton("➕ إضافة كتاب (اضغط هنا)", callback_data="add_book"),
+            InlineKeyboardButton("🗑 حذف كتاب (اضغط هنا)", callback_data="delete_book")
+        ])
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
     await update.message.reply_text(
-        "أهلاً بك في البوت الإسلامي! اختر أحد العلماء لعرض كتبه:",
-        reply_markup=build_main_menu()
+        f"السلام عليكم ورحمة الله وبركاته، {username} 🌿\n"
+        "قال رسول الله ﷺ:\n"
+        "«من صلى عليَّ صلاة، صلى الله عليه بها عشرًا» (رواه مسلم)\n\n"
+        "🌟 لا تحرم نفسك من هذا الأجر، صلِّ على النبي ﷺ.\n\n"
+        "✍ أرسل اسم الكتاب للحصول على نسخه PDF، أو اضغط على أحد الأزرار أدناه ⬇",
+        reply_markup=reply_markup
     )
 
-# التعامل مع الأزرار
+# عرض كتب عالم معين
+async def show_books_by_author(update: Update, context: ContextTypes.DEFAULT_TYPE, author):
+    books = FILES.get(author, {})
+    if not books:
+        await update.callback_query.edit_message_text("❌ لا توجد كتب لهذا العالم حاليًا.")
+        return
+
+    buttons = [
+        [InlineKeyboardButton(title, callback_data=f"book_{author}{title}")]
+        for title in books
+    ]
+    await update.callback_query.edit_message_text(
+        f"📚 كتب {author}:", reply_markup=InlineKeyboardMarkup(buttons)
+    )
+
+# الرد على ضغط الأزرار
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
+    user_id = query.from_user.id
     data = query.data
 
-    if data == "back":
+    await query.answer()
+
+    if data.startswith("author_"):
+        author = data.split("author_")[1]
+        await show_books_by_author(update, context, author)
+
+    elif data.startswith("book_"):
+        parts = data.split("book_")[1].split("")
+        author, title = parts[0], parts[1]
+        file_path = FILES.get(author, {}).get(title)
+        if file_path:
+            with open(file_path, "rb") as f:
+                await query.message.reply_document(InputFile(f, filename=os.path.basename(file_path)))
+        else:
+            await query.message.reply_text("❌ لم يتم العثور على الكتاب.")
+
+    elif data == "add_book" and user_id == ADMIN_ID:
         await query.edit_message_text(
-            "أهلاً بك! اختر أحد العلماء:",
-            reply_markup=build_main_menu()
+            "📥 أرسل الآن ملف PDF الذي تريد إضافته. اسمه يجب أن يكون: اسم_العالم - اسم_الكتاب.pdf"
         )
 
-    elif data.startswith("s:"):
-        scholar = data[2:]
-        is_admin = query.from_user.id == ADMIN_ID
+    elif data == "delete_book" and user_id == ADMIN_ID:
         await query.edit_message_text(
-            f"📚 كتب {scholar}:",
-            reply_markup=build_books_menu(scholar, is_admin)
+            "🗑 أرسل الآن اسم الكتاب الذي تريد حذفه باستخدام الأمر:\n`/delete اسم الكتاب`",
+            parse_mode="Markdown"
         )
 
-    elif data.startswith("b:"):
-        book_id = data[2:]
-        scholar, title = BOOKS.get(book_id, (None, None))
-        if not scholar or not title:
-            await query.edit_message_text("❌ لم يتم العثور على الكتاب.")
-            return
+# إرسال الكتاب عند الطلب
+async def send_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    now = time.time()
+    last_time = context.user_data.get("last_request_time", 0)
+    if now - last_time < 5:
+        await update.message.reply_text("⏳ الرجاء الانتظار قليلاً قبل طلب كتاب آخر.")
+        return
 
-        file_path = FILES[scholar].get(title)
-        if not file_path:
-            await query.edit_message_text("❌ الملف غير موجود.")
-            return
+    context.user_data["last_request_time"] = now
+    query = update.message.text
+    result = smart_search(query)
+    if result:
+        author, title = result
+        file_path = FILES[author][title]
+        await update.message.reply_text(f"📘 تم العثور على: {title}\n👤 المؤلف: {author}")
+        with open(file_path, "rb") as f:
+            await update.message.reply_document(InputFile(f, filename=os.path.basename(file_path)))
+    else:
+        await update.message.reply_text("❌ لم يتم العثور على الكتاب. تأكد من كتابة الاسم بشكل صحيح.")
 
-        keyboard = []
-        if query.from_user.id == ADMIN_ID:
-            keyboard.append([
-                InlineKeyboardButton("🗑 حذف الكتاب", callback_data=f"d:{book_id}")
-            ])
+# ✅ إضافة كتاب (للأدمن فقط)
+async def add_book(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("🚫 هذا الأمر مخصص للمشرف فقط.")
+        return
 
-        await context.bot.send_document(
-            chat_id=query.message.chat_id,
-            document=InputFile(file_path),
-            caption=f"📖 {title}\n👤 {scholar}",
-            reply_markup=InlineKeyboardMarkup(keyboard) if keyboard else None
-        )
+    if not update.message.document:
+        await update.message.reply_text("📎 أرسل ملف PDF مع العنوان بهذا الشكل: اسم_العالم - اسم_الكتاب.pdf")
+        return
 
-    elif data.startswith("d:") and query.from_user.id == ADMIN_ID:
-        book_id = data[2:]
-        scholar, title = BOOKS.get(book_id, (None, None))
-        if not scholar:
-            await query.edit_message_text("❌ لم يتم العثور على الكتاب.")
-            return
+    doc = update.message.document
+    name = doc.file_name.replace(".pdf", "")
+    if "-" not in name:
+        await update.message.reply_text("❗ اسم الملف غير صحيح. يجب أن يكون بصيغة: اسم_العالم - اسم_الكتاب.pdf")
+        return
 
-        path = FILES[scholar].pop(title, None)
-        if path and os.path.exists(path):
-            os.remove(path)
-        BOOKS.pop(book_id, None)
+    author, title = [part.strip().replace("_", " ") for part in name.split("-", 1)]
+    file_path = f"files/{doc.file_name}"
+    file = await doc.get_file()
+    await file.download_to_drive(file_path)
 
-        await query.edit_message_text("✅ تم حذف الكتاب.", reply_markup=build_main_menu())
+    if author not in FILES:
+        FILES[author] = {}
+    FILES[author][title] = file_path
 
-    elif data == "add_book" and query.from_user.id == ADMIN_ID:
-        await query.edit_message_text(
-            "📤 أرسل الآن ملف PDF وسأضيفه تلقائيًا.\nصيغة الاسم: اسم_العالم - عنوان_الكتاب.pdf"
-        )
-        context.user_data["awaiting_file"] = True
+    await update.message.reply_text(f"✅ تم إضافة الكتاب: {title}\n👤 المؤلف: {author}")
 
-# استقبال ملفات PDF من الأدمن
-async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if context.user_data.get("awaiting_file") and update.message.document:
-        doc = update.message.document
-        file_name = doc.file_name
+# حذف كتاب (للأدمن فقط)
+async def delete_book(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("🚫 هذا الأمر مخصص للمشرف فقط.")
+        return
 
-        if not file_name.endswith(".pdf") or "-" not in file_name:
-            await update.message.reply_text("⚠ يجب أن يكون الاسم بصيغة: العالم - الكتاب.pdf")
-            return
+    title = " ".join(context.args)
+    result = smart_search(title)
+    if result:
+        author, real_title = result
+        try:
+            os.remove(FILES[author][real_title])
+        except FileNotFoundError:
+            pass
+        del FILES[author][real_title]
+        await update.message.reply_text(f"✅ تم حذف الكتاب: {real_title} (المؤلف: {author})")
+    else:
+        await update.message.reply_text("❌ لم يتم العثور على الكتاب.")
 
-        scholar, title = [x.strip() for x in file_name[:-4].split("-", 1)]
-        os.makedirs(f"books/{scholar}", exist_ok=True)
-        path = f"books/{scholar}/{title}.pdf"
+# إعداد التطبيق
+application = Application.builder().token(TOKEN).build()
+application.add_handler(CommandHandler("start", start))
+application.add_handler(CommandHandler("delete", delete_book))
+application.add_handler(CallbackQueryHandler(button_handler))
+application.add_handler(MessageHandler(filters.Document.PDF, add_book))
+application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, send_file))
 
-        await doc.get_file().download_to_drive(path)
-        FILES.setdefault(scholar, {})[title] = path
-        get_book_id(scholar, title)
+# Webhook و UptimeRobot
+async def handle_webhook(request):
+    data = await request.json()
+    update = Update.de_json(data, application.bot)
+    await application.process_update(update)
+    return web.Response()
 
-        await update.message.reply_text(f"✅ تم إضافة الكتاب: {title} 👤 {scholar}")
-        context.user_data["awaiting_file"] = False
+async def handle_home(request):
+    return web.Response(text="✅ Bot is running", status=200)
 
-# تشغيل البوت
+async def on_startup(app):
+    init_db()
+    await application.bot.set_webhook(WEBHOOK_URL)
+    await application.initialize()
+    await application.start()
+
+web_app = web.Application()
+web_app.router.add_post("/webhook", handle_webhook)
+web_app.router.add_get("/", handle_home)
+web_app.on_startup.append(on_startup)
+
 if __name__ == "__main__":
-    load_books()
-    app = Application.builder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(button_handler))
-    app.add_handler(MessageHandler(filters.Document.PDF, document_handler))
-
-    print("🤖 Bot is running...")
-    app.run_polling()
+    web.run_app(web_app, port=8000)
