@@ -3,11 +3,16 @@ import difflib
 import unicodedata
 import time
 import sqlite3
+
 from aiohttp import web
 from telegram import Update, InputFile, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-    Application, CommandHandler, MessageHandler,
-    ContextTypes, CallbackQueryHandler, filters
+    Application,
+    CommandHandler,
+    MessageHandler,
+    ContextTypes,
+    CallbackQueryHandler,
+    filters,
 )
 
 # ✅ إنشاء قاعدة البيانات وتخزين الدولة لكل مستخدم
@@ -67,6 +72,7 @@ def smart_search(query):
         for author, books in FILES.items()
         for title in books
     }
+
     exact_matches = [
         original for norm, original in flat_files.items()
         if norm_query in norm
@@ -109,12 +115,10 @@ async def show_books_by_author(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     buttons = [
-        [InlineKeyboardButton(title, callback_data=f"book_{author}{title}")]
+        [InlineKeyboardButton(title, callback_data=f"book|{author}|{title}")]
         for title in books
     ]
-    await update.callback_query.edit_message_text(
-        f"📚 كتب {author}:", reply_markup=InlineKeyboardMarkup(buttons)
-    )
+    await update.callback_query.edit_message_text(f"📚 كتب {author}:", reply_markup=InlineKeyboardMarkup(buttons))
 
 # الرد على ضغط الأزرار
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -128,9 +132,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         author = data.split("author_")[1]
         await show_books_by_author(update, context, author)
 
-    elif data.startswith("book_"):
-        parts = data.split("book_")[1].split("")
-        author, title = parts[0], parts[1]
+    elif data.startswith("book|"):
+        _, author, title = data.split("|", 2)
         file_path = FILES.get(author, {}).get(title)
         if file_path:
             with open(file_path, "rb") as f:
@@ -139,15 +142,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text("❌ لم يتم العثور على الكتاب.")
 
     elif data == "add_book" and user_id == ADMIN_ID:
-        await query.edit_message_text(
-            "📥 أرسل الآن ملف PDF الذي تريد إضافته. اسمه يجب أن يكون: اسم_العالم - اسم_الكتاب.pdf"
-        )
+        await query.edit_message_text("📥 أرسل الآن ملف PDF الذي تريد إضافته. اسمه يجب أن يكون: اسم_العالم - اسم_الكتاب.pdf")
 
     elif data == "delete_book" and user_id == ADMIN_ID:
-        await query.edit_message_text(
-            "🗑 أرسل الآن اسم الكتاب الذي تريد حذفه باستخدام الأمر:\n`/delete اسم الكتاب`",
-            parse_mode="Markdown"
-        )
+        await query.edit_message_text("🗑 أرسل الآن اسم الكتاب الذي تريد حذفه باستخدام الأمر:\n/delete اسم الكتاب", parse_mode="Markdown")
 
 # إرسال الكتاب عند الطلب
 async def send_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -160,6 +158,7 @@ async def send_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["last_request_time"] = now
     query = update.message.text
     result = smart_search(query)
+
     if result:
         author, title = result
         file_path = FILES[author][title]
@@ -204,6 +203,7 @@ async def delete_book(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     title = " ".join(context.args)
     result = smart_search(title)
+
     if result:
         author, real_title = result
         try:
