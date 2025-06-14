@@ -6,15 +6,16 @@ import sqlite3
 from aiohttp import web
 from telegram import Update, InputFile, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-    Application,
-    CommandHandler,
-    MessageHandler,
-    ContextTypes,
-    CallbackQueryHandler,
-    filters
+    Application, CommandHandler, MessageHandler, CallbackQueryHandler,
+    ContextTypes, filters
 )
 
-# ✅ إنشاء قاعدة البيانات وتخزين الدولة لكل مستخدم
+# ✅ إعدادات عامة
+TOKEN = os.getenv("BOT_TOKEN")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+ADMIN_ID = 5650658004  # 👑 معرّف الأدمن
+
+# ✅ قاعدة بيانات المستخدمين
 def init_db():
     conn = sqlite3.connect("users.db")
     cursor = conn.cursor()
@@ -27,12 +28,7 @@ def init_db():
     conn.commit()
     conn.close()
 
-# إعدادات عامة
-TOKEN = os.getenv("BOT_TOKEN")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")
-ADMIN_ID = 5650658004  # 👑 معرّف الأدمن
-
-# ✅ قاعدة بيانات الكتب بصيغة: {اسم العالم: {عنوان الكتاب: مسار الملف}}
+# ✅ قاعدة بيانات الكتب
 FILES = {
     "ابن تيمية": {
         "العقيدة الواسطية": "files/العقيدة_الواسطية.pdf"
@@ -53,14 +49,14 @@ FILES = {
     }
 }
 
-# إزالة التشكيل والهمزات لتسهيل البحث
+# ✅ دالة لتنظيف النص
 def normalize(text):
     text = unicodedata.normalize("NFKD", text)
     text = ''.join([c for c in text if not unicodedata.combining(c)])
     text = text.replace("أ", "ا").replace("إ", "ا").replace("آ", "ا").replace("ة", "ه")
     return text.lower().strip()
 
-# البحث الذكي عن الكتب داخل جميع العلماء
+# ✅ البحث الذكي
 def smart_search(query):
     norm_query = normalize(query)
     for scholar, books in FILES.items():
@@ -73,63 +69,52 @@ def smart_search(query):
             return scholar, norm_titles[close_matches[0]]
     return None, None
 
-# ✅ أمر /start
+# ✅ بدء البوت
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     username = update.effective_user.first_name or "أخي الكريم"
-    user_id = update.effective_user.id
-
     keyboard = [
-        [InlineKeyboardButton("📚 عرض الكتب", callback_data="show_books")]
+        [InlineKeyboardButton(scholar, callback_data=f"scholar:{scholar}")]
+        for scholar in FILES.keys()
     ]
-
-    if user_id == ADMIN_ID:
-        keyboard.append([
-            InlineKeyboardButton("➕ إضافة كتاب (اضغط هنا)", callback_data="add_book"),
-            InlineKeyboardButton("🗑 حذف كتاب (اضغط هنا)", callback_data="delete_book")
-        ])
-
     reply_markup = InlineKeyboardMarkup(keyboard)
-
     await update.message.reply_text(
         f"السلام عليكم ورحمة الله وبركاته، {username} 🌿\n"
-        "قال رسول الله ﷺ:\n"
-        "«من صلى عليَّ صلاة، صلى الله عليه بها عشرًا» (رواه مسلم)\n\n"
-        "🌟 لا تحرم نفسك من هذا الأجر، صلِّ على النبي ﷺ.\n\n"
-        "✍ أرسل اسم الكتاب للحصول على نسخه PDF، أو اضغط على أحد الأزرار أدناه ⬇",
+        "✍ اختر اسم أحد العلماء لعرض كتبه، أو أرسل اسم كتاب مباشرة.\n\n"
+        "📚 العلماء المتوفرون:",
         reply_markup=reply_markup
     )
 
-# ✅ عرض قائمة الكتب
-async def list_books(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    message = "📚 الكتب المتوفرة:\n"
-    for scholar, books in FILES.items():
-        message += f"\n📖 {scholar}:\n"
-        for title in books:
-            message += f"  • {title}\n"
-    await update.message.reply_text(message)
-
-# ✅ الرد على ضغط الأزرار
+# ✅ التعامل مع الأزرار
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = query.from_user.id
     data = query.data
     await query.answer()
 
-    if data == "show_books":
-        message = "📚 الكتب المتوفرة:\n"
-        for scholar, books in FILES.items():
-            message += f"\n📖 {scholar}:\n"
-            for title in books:
-                message += f"  • {title}\n"
-        await query.edit_message_text(message)
+    if data.startswith("scholar:"):
+        scholar = data.split(":", 1)[1]
+        books = FILES.get(scholar, {})
+        if not books:
+            await query.edit_message_text(f"❌ لا توجد كتب حالياً تحت اسم: {scholar}")
+            return
 
-    elif data == "add_book" and user_id == ADMIN_ID:
-        await query.edit_message_text("📥 أرسل الآن ملف PDF الذي تريد إضافته. اسم الملف يكون كالتالي:\n`اسم العالم - اسم الكتاب.pdf`", parse_mode="Markdown")
+        keyboard = [
+            [InlineKeyboardButton(title, callback_data=f"book:{scholar}:{title}")]
+            for title in books
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(f"📚 كتب {scholar}:", reply_markup=reply_markup)
 
-    elif data == "delete_book" and user_id == ADMIN_ID:
-        await query.edit_message_text("🗑 أرسل الآن اسم الكتاب الذي تريد حذفه باستخدام الأمر:\n`/delete اسم العالم - اسم الكتاب`", parse_mode="Markdown")
+    elif data.startswith("book:"):
+        _, scholar, title = data.split(":", 2)
+        file_path = FILES[scholar].get(title)
+        if file_path and os.path.exists(file_path):
+            with open(file_path, "rb") as f:
+                await query.message.reply_document(InputFile(f, filename=os.path.basename(file_path)))
+        else:
+            await query.edit_message_text("❌ لم يتم العثور على الملف المطلوب.")
 
-# ✅ إرسال الكتاب عند الطلب
+# ✅ إرسال كتاب عبر البحث
 async def send_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     now = time.time()
     last_time = context.user_data.get("last_request_time", 0)
@@ -148,26 +133,27 @@ async def send_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("❌ لم يتم العثور على الكتاب. تأكد من كتابة الاسم بشكل صحيح.")
 
-# ✅ إضافة كتاب (للأدمن فقط)
+# ✅ إضافة كتاب (أدمن فقط)
 async def add_book(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("🚫 هذا الأمر مخصص للمشرف فقط.")
         return
 
     if not update.message.document:
-        await update.message.reply_text("📎 أرسل ملف PDF مع العنوان بهذا الشكل:\n`اسم العالم - اسم الكتاب.pdf`", parse_mode="Markdown")
+        await update.message.reply_text(
+            "📎 أرسل ملف PDF مع العنوان بهذا الشكل:\n`اسم العالم - اسم الكتاب.pdf`",
+            parse_mode="Markdown"
+        )
         return
 
     doc = update.message.document
     filename = doc.file_name.replace(".pdf", "")
-
     if "-" not in filename:
         await update.message.reply_text("❌ تأكد من أن اسم الملف يحتوي على '-' بين اسم العالم واسم الكتاب.")
         return
 
     scholar, title = map(str.strip, filename.split("-", 1))
     file_path = f"files/{doc.file_name}"
-
     file = await doc.get_file()
     await file.download_to_drive(file_path)
 
@@ -177,7 +163,7 @@ async def add_book(update: Update, context: ContextTypes.DEFAULT_TYPE):
     FILES[scholar][title] = file_path
     await update.message.reply_text(f"✅ تم إضافة الكتاب: {title}\n📚 تحت اسم العالم: {scholar}")
 
-# ✅ حذف كتاب (للأدمن فقط)
+# ✅ حذف كتاب (أدمن فقط)
 async def delete_book(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("🚫 هذا الأمر مخصص للمشرف فقط.")
@@ -189,7 +175,6 @@ async def delete_book(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     scholar, title = map(str.strip, args.split("-", 1))
-
     if scholar in FILES and title in FILES[scholar]:
         try:
             os.remove(FILES[scholar][title])
@@ -203,13 +188,12 @@ async def delete_book(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ✅ إعداد التطبيق
 application = Application.builder().token(TOKEN).build()
 application.add_handler(CommandHandler("start", start))
-application.add_handler(CommandHandler("books", list_books))
 application.add_handler(CommandHandler("delete", delete_book))
 application.add_handler(CallbackQueryHandler(button_handler))
 application.add_handler(MessageHandler(filters.Document.PDF, add_book))
 application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, send_file))
 
-# ✅ Webhook و UptimeRobot
+# ✅ Webhook aiohttp
 async def handle_webhook(request):
     data = await request.json()
     update = Update.de_json(data, application.bot)
@@ -225,7 +209,6 @@ async def on_startup(app):
     await application.initialize()
     await application.start()
 
-# ✅ خادم aiohttp
 web_app = web.Application()
 web_app.router.add_post("/webhook", handle_webhook)
 web_app.router.add_get("/", handle_home)
