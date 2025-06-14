@@ -74,7 +74,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     username = update.effective_user.first_name or "أخي الكريم"
     keyboard = [
         [InlineKeyboardButton(scholar, callback_data=f"scholar:{scholar}")]
-        for scholar in FILES.keys()
+        for scholar in FILES
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(
@@ -87,7 +87,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ✅ التعامل مع الأزرار
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    user_id = query.from_user.id
     data = query.data
     await query.answer()
 
