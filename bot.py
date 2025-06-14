@@ -10,8 +10,10 @@ from telegram.ext import (
     Application, CommandHandler, MessageHandler,
     ContextTypes, CallbackQueryHandler, filters
 )
+from aiohttp import web
 
 TOKEN = os.getenv("BOT_TOKEN")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 ADMIN_ID = 5650658004
 
 # ✅ إنشاء قاعدة بيانات الكتب
@@ -202,7 +204,7 @@ async def delete_book(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("❌ لم يتم العثور على الكتاب.")
 
-# ✅ التشغيل
+# ✅ التشغيل بـ Webhook لـ Render
 def main():
     init_db()
     global FILES
@@ -214,7 +216,29 @@ def main():
     application.add_handler(CallbackQueryHandler(button_handler))
     application.add_handler(MessageHandler(filters.Document.PDF, add_book))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, send_file))
-    application.run_polling()
+
+    # إعداد Webhook
+    async def on_startup(app):
+        await application.initialize()
+        await application.start()
+        await application.bot.set_webhook(WEBHOOK_URL)
+
+    async def handle_webhook(request):
+        data = await request.json()
+        update = Update.de_json(data, application.bot)
+        await application.process_update(update)
+        return web.Response()
+
+    async def handle_home(request):
+        return web.Response(text="✅ Bot is running!", status=200)
+
+    web_app = web.Application()
+    web_app.router.add_post("/webhook", handle_webhook)
+    web_app.router.add_get("/", handle_home)
+    web_app.on_startup.append(on_startup)
+
+    port = int(os.getenv("PORT", 8000))
+    web.run_app(web_app, port=port)
 
 if __name__ == "__main__":
     main()
