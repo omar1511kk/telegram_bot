@@ -3,13 +3,13 @@ import difflib
 import unicodedata
 import time
 import sqlite3
-import urllib.parse  # ✅ لإصلاح مشكلة أسماء العلماء
+import hashlib
 
 from aiohttp import web
 from telegram import Update, InputFile, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-    Application, CommandHandler, MessageHandler, ContextTypes,
-    CallbackQueryHandler, filters
+    Application, CommandHandler, MessageHandler,
+    ContextTypes, CallbackQueryHandler, filters
 )
 
 # ✅ إعداد قاعدة البيانات لتخزين الدولة
@@ -49,9 +49,7 @@ FILES = {
     "صالح الفوزان": {
         "نواقض الإسلام": "files/نواقض_الاسلام.pdf"
     },
-    "ابن باز": {
-        # كتب ابن باز يمكن إضافتها لاحقًا
-    }
+    "ابن باز": {}
 }
 
 # ✅ إزالة التشكيل والهمزات لتسهيل البحث
@@ -82,9 +80,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     username = update.effective_user.first_name or "أخي الكريم"
     user_id = update.effective_user.id
 
-    keyboard = [[
-        InlineKeyboardButton(name, callback_data=f"author_{urllib.parse.quote(name)}")
-    ] for name in FILES.keys()]  # ✅ ترميز اسم العالم
+    keyboard = [[InlineKeyboardButton(name, callback_data=f"author|{name}")] for name in FILES.keys()]
 
     if user_id == ADMIN_ID:
         keyboard.append([
@@ -113,7 +109,9 @@ async def show_books_by_author(update: Update, context: ContextTypes.DEFAULT_TYP
     buttons = []
     row = []
     for title in books:
-        row.append(InlineKeyboardButton(title, callback_data=f"book|{author}|{title}"))
+        book_id = hashlib.md5(f"{author}|{title}".encode()).hexdigest()
+        context.chat_data[book_id] = (author, title)
+        row.append(InlineKeyboardButton(title, callback_data=f"book|{book_id}"))
         if len(row) == 2:
             buttons.append(row)
             row = []
@@ -131,18 +129,20 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
     await query.answer()
 
-    if data.startswith("author_"):
-        author = urllib.parse.unquote(data.split("author_")[1])  # ✅ فك ترميز اسم العالم
+    if data.startswith("author|"):
+        author = data.split("author|")[1]
         await show_books_by_author(update, context, author)
 
     elif data.startswith("book|"):
-        _, author, title = data.split("|", 2)
-        file_path = FILES.get(author, {}).get(title)
-        if file_path:
-            with open(file_path, "rb") as f:
-                await query.message.reply_document(InputFile(f, filename=os.path.basename(file_path)))
-        else:
-            await query.message.reply_text("❌ لم يتم العثور على الكتاب.")
+        book_id = data.split("book|")[1]
+        author, title = context.chat_data.get(book_id, (None, None))
+        if author and title:
+            file_path = FILES.get(author, {}).get(title)
+            if file_path:
+                with open(file_path, "rb") as f:
+                    await query.message.reply_document(InputFile(f, filename=os.path.basename(file_path)))
+                return
+        await query.message.reply_text("❌ لم يتم العثور على الكتاب.")
 
     elif data == "add_book" and user_id == ADMIN_ID:
         await query.edit_message_text("📥 أرسل الآن ملف PDF الذي تريد إضافته. اسمه يجب أن يكون: اسم_العالم - اسم_الكتاب.pdf")
@@ -217,33 +217,15 @@ async def delete_book(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ لم يتم العثور على الكتاب.")
 
 # ✅ إعداد التطبيق
-application = Application.builder().token(TOKEN).build()
-application.add_handler(CommandHandler("start", start))
-application.add_handler(CommandHandler("delete", delete_book))
-application.add_handler(CallbackQueryHandler(button_handler))
-application.add_handler(MessageHandler(filters.Document.PDF, add_book))
-application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, send_file))
-
-# ✅ Webhook و UptimeRobot
-async def handle_webhook(request):
-    data = await request.json()
-    update = Update.de_json(data, application.bot)
-    await application.process_update(update)
-    return web.Response()
-
-async def handle_home(request):
-    return web.Response(text="✅ Bot is running", status=200)
-
-async def on_startup(app):
+def main():
     init_db()
-    await application.bot.set_webhook(WEBHOOK_URL)
-    await application.initialize()
-    await application.start()
-
-web_app = web.Application()
-web_app.router.add_post("/webhook", handle_webhook)
-web_app.router.add_get("/", handle_home)
-web_app.on_startup.append(on_startup)
+    application = Application.builder().token(TOKEN).build()
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("delete", delete_book))
+    application.add_handler(CallbackQueryHandler(button_handler))
+    application.add_handler(MessageHandler(filters.Document.PDF, add_book))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, send_file))
+    application.run_polling()
 
 if __name__ == "__main__":
-    web.run_app(web_app, port=8000)
+    main()
