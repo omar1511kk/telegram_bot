@@ -78,18 +78,19 @@ def normalize(text):
 
 def smart_search(query):
     norm_query = normalize(query)
+
+    # دمج اسم المؤلف مع عنوان الكتاب للبحث
     flat = {
-        normalize(title): (author, title)
+        normalize(f"{author} {title}"): (author, title)
         for author, books in FILES.items()
         for title in books
     }
 
-    exact = [original for norm, original in flat.items() if norm_query in norm]
-    if exact:
-        return exact[0]
+    close = difflib.get_close_matches(norm_query, flat.keys(), n=1, cutoff=0.6)
+    if close:
+        return flat[close[0]]
 
-    close = difflib.get_close_matches(norm_query, flat.keys(), n=1, cutoff=0.8)
-    return flat[close[0]] if close else None
+    return None
 
 # =====================================================
 # ✅ الأوامر
