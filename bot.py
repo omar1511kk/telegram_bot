@@ -185,11 +185,16 @@ async def add_book(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not doc or not doc.file_name.endswith(".pdf"):
         return await update.message.reply_text("📎 أرسل ملف PDF بصيغة: اسم_العالم - اسم_الكتاب.pdf")
 
-    name = doc.file_name.replace(".pdf", "")
-    if " - " not in name:
+    name = doc.file_name.replace(".pdf", "").strip()
+
+    # ✅ استخدام regex للتقسيم الذكي
+    match = re.match(r"(.+?)\s*-\s*(.+)", name)
+    if not match:
         return await update.message.reply_text("❗ اسم الملف يجب أن يكون بصيغة: اسم_العالم - اسم_الكتاب.pdf")
 
-    author, title = [part.strip().replace("_", " ") for part in name.split(" - ", 1)]
+    author = match.group(1).replace("_", " ").strip()
+    title = match.group(2).replace("_", " ").strip()
+
     file_path = f"files/{doc.file_name}"
 
     file = await doc.get_file()
