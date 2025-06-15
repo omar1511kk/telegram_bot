@@ -1,5 +1,5 @@
 aiogram==2.25.2
-aiohttp==3.9.5
+aiohttp>=3.8.0,<3.9.0
 google-api-python-client==2.126.0
 google-auth==2.29.0
 google-auth-oauthlib==1.2.0
