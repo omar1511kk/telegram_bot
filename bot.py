@@ -1,4 +1,4 @@
-# ✅ استيراد المكتبات
+# ✅ استيراد المكتبات الضرورية
 import os
 import difflib
 import unicodedata
@@ -24,7 +24,7 @@ WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 ADMIN_ID = 5650658004
 
 # =====================================================
-# ✅ قاعدة البيانات
+# ✅ قاعدة البيانات لتخزين الكتب
 # =====================================================
 
 def init_db():
@@ -75,7 +75,7 @@ def normalize(text):
     text = unicodedata.normalize("NFKD", text)
     text = ''.join([c for c in text if not unicodedata.combining(c)])
     text = text.replace("أ", "ا").replace("إ", "ا").replace("آ", "ا").replace("ة", "ه")
-    text = text.replace("_", " ")  # إضافة مهمة: معالجة الشرطات السفلية
+    text = text.replace("_", " ")  # معالجة الشرطات السفلية
     return text.lower().strip()
 
 def smart_search(query):
@@ -101,16 +101,21 @@ def smart_search(query):
     return flat[close[0]] if close else None
 
 # =====================================================
-# ✅ الأوامر
+# ✅ الأوامر الرئيسية
 # =====================================================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     username = update.effective_user.first_name or "أخي الكريم"
     user_id = update.effective_user.id
-    keyboard = [
-        [InlineKeyboardButton(name, callback_data=f"author|{name}")]
-        for name in FILES
-    ]
+    
+    # إنشاء لوحة المفاتيح مع تقصير أسماء المؤلفين
+    keyboard = []
+    for name in list(FILES.keys())[:20]:  # عرض أول 20 مؤلف فقط لتجنب المشاكل
+        # إنشاء معرّف فريد مختصر للمؤلف
+        author_id = hashlib.md5(name.encode()).hexdigest()[:8]
+        keyboard.append([InlineKeyboardButton(name, callback_data=f"author|{author_id}")])
+        # تخزين الاسم الكامل مقابل المعرّف المختصر
+        context.chat_data[author_id] = name
 
     if user_id == ADMIN_ID:
         keyboard.append([
@@ -131,8 +136,10 @@ async def show_books_by_author(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     buttons, row = [], []
-    for title in books:
-        book_id = hashlib.md5(f"{author}|{title}".encode()).hexdigest()
+    for title in list(books.keys())[:50]:  # عرض أول 50 كتاب فقط
+        # إنشاء معرّف فريد مختصر للكتاب
+        book_id = hashlib.md5(f"{author}|{title}".encode()).hexdigest()[:8]
+        # تخزين معلومات الكتاب مقابل المعرّف المختصر
         context.chat_data[book_id] = (author, title)
         row.append(InlineKeyboardButton(title, callback_data=f"book|{book_id}"))
         if len(row) == 2:
@@ -153,13 +160,18 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
 
     if data.startswith("author|"):
-        author = data.split("author|")[1]
-        await show_books_by_author(update, context, author)
+        author_id = data.split("author|")[1]
+        author = context.chat_data.get(author_id)
+        if author:
+            await show_books_by_author(update, context, author)
+        else:
+            await query.message.reply_text("❌ لم يتم العثور على المؤلف.")
 
     elif data.startswith("book|"):
         book_id = data.split("book|")[1]
-        author, title = context.chat_data.get(book_id, (None, None))
-        if author and title:
+        book_info = context.chat_data.get(book_id)
+        if book_info:
+            author, title = book_info
             file_path = FILES.get(author, {}).get(title)
             if file_path:
                 with open(file_path, "rb") as f:
@@ -320,7 +332,7 @@ def main():
         return web.Response()
 
     async def handle_home(request):
-        return web.Response(text="✅ Bot is running!", status=200)
+        return web.Response(text="✅ البوت يعمل بنجاح!", status=200)
 
     web_app = web.Application()
     web_app.router.add_post("/webhook", handle_webhook)
