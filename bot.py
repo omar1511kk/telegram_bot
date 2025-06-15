@@ -1,150 +1,143 @@
 import os
 import sqlite3
-import logging
-import tempfile
-from google.oauth2 import service_account
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackQueryHandler, ContextTypes
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    Application, CommandHandler, MessageHandler,
-    filters, CallbackQueryHandler, ContextTypes
-)
+from google.oauth2.service_account import Credentials
+from aiohttp import web
 
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
+TOKEN = os.environ.get("BOT_TOKEN")
+ADMIN_ID = 5650658004
+GOOGLE_DRIVE_FOLDER_ID = os.environ.get("DRIVE_FOLDER_ID")
+WEBHOOK_URL = os.environ.get("WEBHOOK_URL")  # مثل: https://your-app.onrender.com/telegram-webhook/yourtoken
 
-# === إعداد Google Drive باستخدام حساب خدمة ===
-service_account_json = os.getenv("GDRIVE_CREDENTIALS_JSON")
-if not service_account_json:
-    raise Exception("متغير البيئة GDRIVE_CREDENTIALS_JSON غير موجود!")
+# === Google Drive Auth ===
+creds = Credentials.from_service_account_file("credentials.json", scopes=["https://www.googleapis.com/auth/drive"])
+drive_service = build("drive", "v3", credentials=creds)
 
-with tempfile.NamedTemporaryFile(delete=False, mode='w', suffix=".json") as tmp:
-    tmp.write(service_account_json)
-    service_account_path = tmp.name
-
-SCOPES = ['https://www.googleapis.com/auth/drive']
-creds = service_account.Credentials.from_service_account_file(service_account_path, scopes=SCOPES)
-drive_service = build('drive', 'v3', credentials=creds)
-
-# === إعداد قاعدة البيانات ===
-conn = sqlite3.connect("books.db", check_same_thread=False)
+# === SQLite Setup ===
+conn = sqlite3.connect("books.db")
 cursor = conn.cursor()
-cursor.execute('''
-CREATE TABLE IF NOT EXISTS books (
+cursor.execute("""CREATE TABLE IF NOT EXISTS books (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     scholar TEXT,
     title TEXT,
-    url TEXT
-)
-''')
+    drive_link TEXT
+)""")
 conn.commit()
 
-# === إعداد البوت ===
-TOKEN = os.getenv("BOT_TOKEN")
-WEBHOOK_BASE_URL = os.getenv("WEBHOOK_BASE_URL")  # مثال: https://yourdomain.com
-ADMIN_ID = 5650658004
-
-# --- أوامر البوت ---
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# === أزرار العلماء ===
+def get_scholars():
     cursor.execute("SELECT DISTINCT scholar FROM books")
-    scholars = cursor.fetchall()
-    if not scholars:
-        return await update.message.reply_text("لا توجد كتب مضافة حالياً.")
-    keyboard = [[InlineKeyboardButton(s[0], callback_data=f"scholar:{s[0]}")] for s in scholars]
-    await update.message.reply_text("اختر اسم العالم:", reply_markup=InlineKeyboardMarkup(keyboard))
+    return [row[0] for row in cursor.fetchall()]
 
-async def scholar_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    scholar = q.data.split(":", 1)[1]
+def get_books_by_scholar(scholar):
     cursor.execute("SELECT title FROM books WHERE scholar = ?", (scholar,))
-    books = cursor.fetchall()
-    if not books:
-        return await q.edit_message_text("لا توجد كتب لهذا العالم.")
-    kb = [[InlineKeyboardButton(t[0], callback_data=f"book:{t[0]}")] for t in books]
-    await q.edit_message_text(f"📚 كتب {scholar}:", reply_markup=InlineKeyboardMarkup(kb))
+    return [row[0] for row in cursor.fetchall()]
 
-async def book_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    title = q.data.split(":", 1)[1]
-    cursor.execute("SELECT url FROM books WHERE title = ?", (title,))
-    res = cursor.fetchone()
-    if not res:
-        return await q.edit_message_text("الكتاب غير موجود.")
-    await q.message.reply_document(document=res[0], caption=title)
+def get_link_by_title(title):
+    cursor.execute("SELECT drive_link FROM books WHERE title = ?", (title,))
+    row = cursor.fetchone()
+    return row[0] if row else None
 
-async def add(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = update.message
-    if msg.from_user.id != ADMIN_ID:
-        return await msg.reply_text("ليس لديك صلاحية.")
-    if not context.args or msg.document is None:
-        return await msg.reply_text("الاستخدام:\n/add [اسم_العالم] [عنوان_الكتاب] مع إرفاق PDF")
-    scholar = context.args[0]
-    title = " ".join(context.args[1:])
-    doc = await msg.document.get_file()
-    local = f"{title}.pdf"
-    await doc.download_to_drive(local)
-    meta = {'name': local}
-    media = MediaFileUpload(local, mimetype='application/pdf')
-    uploaded = drive_service.files().create(body=meta, media_body=media, fields='id').execute()
-    file_id = uploaded.get('id')
-    drive_service.permissions().create(fileId=file_id, body={'type':'anyone','role':'reader'}).execute()
-    file_url = f"https://drive.google.com/uc?id={file_id}&export=download"
-    cursor.execute("INSERT INTO books (scholar,title,url) VALUES (?,?,?)", (scholar, title, file_url))
+# === رفع إلى Google Drive ===
+def upload_pdf_to_drive(local_path, title):
+    media = MediaFileUpload(local_path, mimetype="application/pdf")
+    file_metadata = {"name": title, "parents": [GOOGLE_DRIVE_FOLDER_ID]}
+    file = drive_service.files().create(body=file_metadata, media_body=media, fields="id").execute()
+    file_id = file.get("id")
+    drive_service.permissions().create(fileId=file_id, body={"role": "reader", "type": "anyone"}).execute()
+    return f"https://drive.google.com/uc?export=download&id={file_id}"
+
+# === Handlers ===
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    scholars = get_scholars()
+    keyboard = [[InlineKeyboardButton(name, callback_data=f"scholar:{name}")] for name in scholars]
+    await update.message.reply_text("اختر اسم العالم لرؤية كتبه:", reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def handle_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    if data.startswith("scholar:"):
+        scholar = data.split(":", 1)[1]
+        books = get_books_by_scholar(scholar)
+        keyboard = [[InlineKeyboardButton(book, callback_data=f"book:{book}")] for book in books]
+        await query.edit_message_text(f"📚 كتب {scholar}:", reply_markup=InlineKeyboardMarkup(keyboard))
+    elif data.startswith("book:"):
+        title = data.split(":", 1)[1]
+        link = get_link_by_title(title)
+        if link:
+            await query.message.reply_document(document=link, filename=f"{title}.pdf")
+        else:
+            await query.message.reply_text("❌ الملف غير موجود.")
+
+async def handle_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("❌ هذا الأمر مخصص للمسؤول فقط.")
+        return
+    await update.message.reply_text("أرسل ملف PDF مع الرسالة بالشكل التالي:\n`اسم العالم - اسم الكتاب`", parse_mode="Markdown")
+
+async def handle_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("❌ هذا الأمر مخصص للمسؤول فقط.")
+        return
+    await update.message.reply_text("أرسل اسم الكتاب الذي تريد حذفه.")
+
+async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    doc = update.message.document
+    caption = update.message.caption or update.message.text
+    if not caption or "-" not in caption:
+        await update.message.reply_text("❌ الصيغة غير صحيحة. استخدم: اسم العالم - اسم الكتاب", parse_mode="Markdown")
+        return
+    scholar, title = map(str.strip, caption.split("-", 1))
+    file = await context.bot.get_file(doc.file_id)
+    local_path = f"{title}.pdf"
+    await file.download_to_drive(local_path)
+    drive_link = upload_pdf_to_drive(local_path, title)
+    cursor.execute("INSERT INTO books (scholar, title, drive_link) VALUES (?, ?, ?)", (scholar, title, drive_link))
     conn.commit()
-    os.remove(local)
-    await msg.reply_text(f"✅ أضيف الكتاب بنجاح:\n*{title}*\n[رابط التحميل]({file_url})", parse_mode="Markdown")
+    os.remove(local_path)
+    await update.message.reply_text(f"✅ تم إضافة الكتاب: {title}")
 
-async def delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = update.message
-    if msg.from_user.id != ADMIN_ID:
-        return await msg.reply_text("ليس لديك صلاحية.")
-    if not context.args:
-        return await msg.reply_text("الاستخدام:\n/delete [عنوان_الكتاب]")
-    title = " ".join(context.args)
-    cursor.execute("SELECT url FROM books WHERE title = ?", (title,))
-    if not cursor.fetchone():
-        return await msg.reply_text("الكتاب غير موجود.")
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    title = update.message.text.strip()
     cursor.execute("DELETE FROM books WHERE title = ?", (title,))
     conn.commit()
-    await msg.reply_text("✅ تم حذف الكتاب.")
+    await update.message.reply_text(f"✅ تم حذف الكتاب: {title}")
 
-async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    txt = update.message.text.strip()
-    cursor.execute("SELECT title,url FROM books WHERE title LIKE ?", (f"%{txt}%",))
-    rows = cursor.fetchall()
-    if not rows:
-        return await update.message.reply_text("لم يتم العثور على كتاب.")
-    for t, u in rows:
-        await update.message.reply_document(document=u, caption=t)
+# === Aiohttp server للـ Webhook و UptimeRobot ===
+async def root_handler(request):
+    return web.Response(text="✅ Bot is alive!")
 
-# --- تشغيل مع Webhook ---
+async def webhook_handler(request):
+    data = await request.json()
+    await application.update_queue.put(Update.de_json(data, application.bot))
+    return web.Response(text="OK")
+
+# === post_init لإعداد webhook بعد التشغيل ===
+async def post_init(application: Application):
+    await application.bot.set_webhook(url=WEBHOOK_URL)
+
+# === Main app setup ===
+application = Application.builder().token(TOKEN).post_init(post_init).build()
+application.add_handler(CommandHandler("start", start))
+application.add_handler(CommandHandler("add", handle_add))
+application.add_handler(CommandHandler("delete", handle_delete))
+application.add_handler(CallbackQueryHandler(handle_query))
+application.add_handler(MessageHandler(filters.Document.PDF, handle_document))
+application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+
+# === Web server setup ===
+aio_app = web.Application()
+aio_app.router.add_get("/", root_handler)  # UptimeRobot
+aio_app.router.add_post(f"/telegram-webhook/{TOKEN}", webhook_handler)
+
 if __name__ == "__main__":
-    app = Application.builder().token(TOKEN).build()
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("add", add))
-    app.add_handler(CommandHandler("delete", delete))
-    app.add_handler(CallbackQueryHandler(scholar_cb, pattern="^scholar:"))
-    app.add_handler(CallbackQueryHandler(book_cb, pattern="^book:"))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
-
-    # إعداد Webhook
-    webhook_url = f"{WEBHOOK_BASE_URL}/telegram-webhook/{TOKEN}"
-    async def on_startup(app):
-        await app.bot.set_webhook(webhook_url)
-    async def on_shutdown(app):
-        await app.bot.delete_webhook()
-    app.on_startup(on_startup)
-    app.on_shutdown(on_shutdown)
-
-    # تشغيل خادم لاستقبال الطلبات
-    port = int(os.getenv("PORT", "8443"))
-    from aiohttp import web
-    from telegram.ext import aiohttp_helpers
-    server = aiohttp_helpers.WebhookServer(application=app, path=f"/telegram-webhook/{TOKEN}")
-    web.run_app(server, host="0.0.0.0", port=port)
+    port = int(os.environ.get("PORT", 8443))
+    web.run_app(aio_app, host="0.0.0.0", port=port)
