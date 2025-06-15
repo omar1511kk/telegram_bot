@@ -95,7 +95,7 @@ def smart_search(query):
         return partial_matches[0]
     
     # ثم البحث التقريبي
-    close = difflib.get_close_matches(norm_query, flat.keys(), n=1, cutoff=0.7)
+    close = difflib.get_close_matches(norm_query, flat.keys(), n=1, cutoff=0.6)
     return flat[close[0]] if close else None
 
 # =====================================================
@@ -166,10 +166,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text("❌ لم يتم العثور على الكتاب.")
 
     elif data == "add_book" and user_id == ADMIN_ID:
-        await query.edit_message_text("📥 أرسل ملف PDF بصيغة: اسم_العالم - اسم_الكتاب.pdf")
+        await query.edit_message_text("📥 أرسل ملف PDF. سأحاول استخراج اسم المؤلف والعنوان تلقائياً.\n"
+                                     "يفضل استخدام الصيغة: المؤلف - العنوان.pdf")
 
     elif data == "delete_book" and user_id == ADMIN_ID:
-        await query.edit_message_text("🗑 أرسل اسم الكتاب لحذفه باستخدام:\n/delete اسم الكتاب")
+        await query.edit_message_text("🗑 أرسل اسم الكتاب لحذفه باستخدام:\n/حذف اسم الكتاب")
 
 async def send_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.message.text
@@ -182,7 +183,17 @@ async def send_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         with open(file_path, "rb") as f:
             await update.message.reply_document(InputFile(f, filename=os.path.basename(file_path)))
     else:
-        await update.message.reply_text("❌ لم يتم العثور على الكتاب. جرب كتابة اسم الكتاب أو المؤلف بشكل مختلف.")
+        # البحث التقريبي
+        all_titles = [title for books in FILES.values() for title in books]
+        close_matches = difflib.get_close_matches(query, all_titles, n=3, cutoff=0.5)
+        
+        if close_matches:
+            response = "❌ لم أجد الكتاب، هل تقصد:\n"
+            for match in close_matches:
+                response += f"- {match}\n"
+            await update.message.reply_text(response)
+        else:
+            await update.message.reply_text("❌ لم يتم العثور على الكتاب. جرب كتابة اسم الكتاب بشكل مختلف.")
 
 async def add_book(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
@@ -196,11 +207,35 @@ async def add_book(update: Update, context: ContextTypes.DEFAULT_TYPE):
     original_name = doc.file_name
     name = original_name.replace(".pdf", "").strip()
     
-    # تقسيم الاسم مع مراعاة الشرطة السفلية
-    parts = [part.strip() for part in name.split("-", 1)]
+    # محاولات متعددة لتقسيم الاسم
+    separator = None
     
-    if len(parts) != 2:
-        return await update.message.reply_text("❗ اسم الملف يجب أن يكون بصيغة: اسم_العالم - اسم_الكتاب.pdf")
+    # المحاولة 1: استخدام الشرطة "-"
+    if '-' in name:
+        separator = '-'
+        parts = [part.strip() for part in name.split('-', 1)]
+    
+    # المحاولة 2: استخدام كلمة "لـ"
+    elif 'لـ' in name:
+        separator = 'لـ'
+        parts = [part.strip() for part in name.split('لـ', 1)]
+    
+    # المحاولة 3: استخدام كلمة "من تأليف"
+    elif 'من تأليف' in name:
+        separator = 'من تأليف'
+        parts = [part.strip() for part in name.split('من تأليف', 1)]
+        parts.reverse()  # لأن الصيغة ستكون: العنوان من تأليف المؤلف
+    
+    # المحاولة 4: استخدام آخر مسافة في السلسلة
+    else:
+        last_space_index = name.rfind(' ')
+        if last_space_index != -1:
+            parts = [name[:last_space_index].strip(), name[last_space_index+1:].strip()]
+        else:
+            parts = [name, "مجهول"]  # إذا لم نجد فاصل
+
+    if len(parts) < 2:
+        return await update.message.reply_text("❗ تعذر استخراج المؤلف والعنوان. يرجى استخدام الصيغة: المؤلف - العنوان.pdf")
 
     author = parts[0].replace("_", " ").strip()
     title = parts[1].replace("_", " ").strip()
@@ -208,8 +243,9 @@ async def add_book(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # إنشاء مجلد files إذا لم يكن موجوداً
     os.makedirs("files", exist_ok=True)
     
-    # استخدام الاسم الأصلي للملف لحفظه
-    file_path = f"files/{original_name}"
+    # إنشاء اسم ملف آمن (استبدال المسافات بشرطات سفلية)
+    safe_file_name = f"{author.replace(' ', '')}-{title.replace(' ', '')}.pdf"
+    file_path = f"files/{safe_file_name}"
 
     # تحميل الملف
     try:
@@ -225,9 +261,10 @@ async def add_book(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # إرسال تأكيد مفصل
     await update.message.reply_text(
         f"✅ تم إضافة الكتاب بنجاح:\n"
-        f"📖 العنوان: {title}\n"
         f"👤 المؤلف: {author}\n"
-        f"📁 اسم الملف: {original_name}"
+        f"📖 العنوان: {title}\n"
+        f"📁 تم حفظه باسم: {safe_file_name}\n\n"
+        f"يمكنك الآن البحث عنه باستخدام: /بحث {title}"
     )
 
 async def delete_book(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -235,6 +272,9 @@ async def delete_book(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await update.message.reply_text("🚫 هذا الأمر للأدمن فقط.")
 
     title = " ".join(context.args)
+    if not title:
+        return await update.message.reply_text("❗ يرجى تحديد اسم الكتاب\nمثال: /حذف القواعد الأربعة")
+    
     result = smart_search(title)
     if result:
         author, real_title = result
@@ -263,6 +303,7 @@ def main():
     application = Application.builder().token(TOKEN).build()
 
     application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("حذف", delete_book))
     application.add_handler(CommandHandler("delete", delete_book))
     application.add_handler(CallbackQueryHandler(button_handler))
     application.add_handler(MessageHandler(filters.Document.PDF, add_book))
