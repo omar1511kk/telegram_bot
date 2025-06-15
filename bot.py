@@ -78,19 +78,18 @@ def normalize(text):
 
 def smart_search(query):
     norm_query = normalize(query)
-
-    # دمج اسم المؤلف مع عنوان الكتاب للبحث
     flat = {
-        normalize(f"{author} {title}"): (author, title)
+        normalize(title): (author, title)
         for author, books in FILES.items()
         for title in books
     }
 
-    close = difflib.get_close_matches(norm_query, flat.keys(), n=1, cutoff=0.6)
-    if close:
-        return flat[close[0]]
+    exact = [original for norm, original in flat.items() if norm_query in norm]
+    if exact:
+        return exact[0]
 
-    return None
+    close = difflib.get_close_matches(norm_query, flat.keys(), n=1, cutoff=0.8)
+    return flat[close[0]] if close else None
 
 # =====================================================
 # ✅ الأوامر
@@ -187,7 +186,7 @@ async def add_book(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await update.message.reply_text("📎 أرسل ملف PDF بصيغة: اسم_العالم - اسم_الكتاب.pdf")
 
     name = doc.file_name.replace(".pdf", "")
-    if not re.match(r"^[\u0600-\u06FFa-zA-Z0-9_ ]+ - [\u0600-\u06FFa-zA-Z0-9_ ]+$", name):
+    if " - " not in name:
         return await update.message.reply_text("❗ اسم الملف يجب أن يكون بصيغة: اسم_العالم - اسم_الكتاب.pdf")
 
     author, title = [part.strip().replace("_", " ") for part in name.split(" - ", 1)]
