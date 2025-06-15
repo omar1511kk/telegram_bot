@@ -54,8 +54,10 @@ def load_books():
 def save_book(author, title, file_path):
     conn = sqlite3.connect("books.db")
     cursor = conn.cursor()
-    cursor.execute("INSERT INTO books (author, title, file_path) VALUES (?, ?, ?)",
-                   (author, title, file_path))
+    cursor.execute(
+        "INSERT INTO books (author, title, file_path) VALUES (?, ?, ?)",
+        (author, title, file_path)
+    )
     conn.commit()
     conn.close()
 
@@ -83,11 +85,9 @@ def smart_search(query):
         for author, books in FILES.items()
         for title in books
     }
-
     exact = [original for norm, original in flat.items() if norm_query in norm]
     if exact:
         return exact[0]
-
     close = difflib.get_close_matches(norm_query, flat.keys(), n=1, cutoff=0.8)
     return flat[close[0]] if close else None
 
@@ -102,13 +102,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton(name, callback_data=f"author|{name}")]
         for name in FILES
     ]
-
     if user_id == ADMIN_ID:
         keyboard.append([
             InlineKeyboardButton("➕ إضافة كتاب", callback_data="add_book"),
             InlineKeyboardButton("🗑 حذف كتاب", callback_data="delete_book"),
         ])
-
     await update.message.reply_text(
         f"السلام عليكم ورحمة الله وبركاته، {username} 🌿\n"
         "✍ أرسل اسم الكتاب أو اختر من الأزرار:",
@@ -182,85 +180,23 @@ async def add_book(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await update.message.reply_text("🚫 هذا الأمر للأدمن فقط.")
 
     doc = update.message.document
-    if not doc or not doc.file_name.endswith(".pdf"):
+    if not doc or not doc.file_name.lower().endswith(".pdf"):
         return await update.message.reply_text("📎 أرسل ملف PDF بصيغة: اسم_العالم - اسم_الكتاب.pdf")
 
-    name = doc.file_name.replace(".pdf", "").strip()
-
-    # ✅ استخدام regex للتقسيم الذكي
-    match = re.match(r"(.+?)\s*-\s*(.+)", name)
-    if not match:
+    raw_name = doc.file_name.encode("utf-8").decode("utf-8", "ignore").replace(".pdf", "").strip()
+    if "-" not in raw_name:
         return await update.message.reply_text("❗ اسم الملف يجب أن يكون بصيغة: اسم_العالم - اسم_الكتاب.pdf")
 
-    author = match.group(1).replace("_", " ").strip()
-    title = match.group(2).replace("_", " ").strip()
+    parts = raw_name.split("-", 1)
+    if len(parts) < 2:
+        return await update.message.reply_text("❗ تعذر استخراج اسم العالم والكتاب من اسم الملف.")
+
+    author = parts[0].replace("_", " ").strip()
+    title = parts[1].replace("_", " ").strip()
+    if not author or not title:
+        return await update.message.reply_text("❗ تأكد من أن اسم الملف يحتوي على اسم العالم واسم الكتاب.")
 
     file_path = f"files/{doc.file_name}"
-
-    file = await doc.get_file()
-    await file.download_to_drive(file_path)
+    await doc.get_file().download_to_drive(file_path)
 
     save_book(author, title, file_path)
-    FILES.setdefault(author, {})[title] = file_path
-
-    await update.message.reply_text(f"✅ تم إضافة: {title}\n👤 {author}")
-
-async def delete_book(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        return await update.message.reply_text("🚫 هذا الأمر للأدمن فقط.")
-
-    title = " ".join(context.args)
-    result = smart_search(title)
-    if result:
-        author, real_title = result
-        try:
-            os.remove(FILES[author][real_title])
-        except FileNotFoundError:
-            pass
-        del FILES[author][real_title]
-        remove_book(author, real_title)
-        await update.message.reply_text(f"✅ تم حذف الكتاب: {real_title}")
-    else:
-        await update.message.reply_text("❌ لم يتم العثور على الكتاب.")
-
-# =====================================================
-# ✅ التشغيل بواسطة Webhook
-# =====================================================
-
-def main():
-    init_db()
-    global FILES
-    FILES = load_books()
-
-    application = Application.builder().token(TOKEN).build()
-
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("delete", delete_book))
-    application.add_handler(CallbackQueryHandler(button_handler))
-    application.add_handler(MessageHandler(filters.Document.PDF, add_book))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, send_file))
-
-    async def on_startup(app):
-        await application.initialize()
-        await application.start()
-        await application.bot.set_webhook(WEBHOOK_URL)
-
-    async def handle_webhook(request):
-        data = await request.json()
-        update = Update.de_json(data, application.bot)
-        await application.process_update(update)
-        return web.Response()
-
-    async def handle_home(request):
-        return web.Response(text="✅ Bot is running!", status=200)
-
-    web_app = web.Application()
-    web_app.router.add_post("/webhook", handle_webhook)
-    web_app.router.add_get("/", handle_home)
-    web_app.on_startup.append(on_startup)
-
-    port = int(os.getenv("PORT", 8000))
-    web.run_app(web_app, port=port)
-
-if __name__ == "__main__":
-    main()
