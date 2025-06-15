@@ -1,10 +1,10 @@
 import os
 import sqlite3
 import logging
-import json
-
-from pydrive.auth import GoogleAuth
-from pydrive.drive import GoogleDrive
+import tempfile
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackQueryHandler, ContextTypes
 
@@ -13,17 +13,16 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 
 # إعداد Google Drive
 service_account_json = os.getenv("GDRIVE_CREDENTIALS_JSON")
-
 if not service_account_json:
     raise Exception("متغير البيئة GDRIVE_CREDENTIALS_JSON غير موجود!")
 
-# حفظ JSON مؤقتًا في ملف
-with open("service_account.json", "w") as f:
-    f.write(service_account_json)
+with tempfile.NamedTemporaryFile(delete=False, mode='w', suffix=".json") as temp:
+    temp.write(service_account_json)
+    service_account_path = temp.name
 
-gauth = GoogleAuth()
-gauth.LoadCredentialsFile("service_account.json")
-drive = GoogleDrive(gauth)
+SCOPES = ['https://www.googleapis.com/auth/drive']
+credentials = service_account.Credentials.from_service_account_file(service_account_path, scopes=SCOPES)
+drive_service = build('drive', 'v3', credentials=credentials)
 
 # إعداد قاعدة البيانات
 conn = sqlite3.connect("books.db", check_same_thread=False)
@@ -44,7 +43,7 @@ if not TOKEN:
 # معرف الأدمن
 ADMIN_ID = 5650658004
 
-# عرض قائمة العلماء
+# بدء البوت
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cursor.execute("SELECT DISTINCT scholar FROM books")
     scholars = cursor.fetchall()
@@ -67,7 +66,7 @@ async def scholar_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     keyboard = [[InlineKeyboardButton(title[0], callback_data=f"book:{title[0]}")] for title in books]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text(f"كتب {scholar}:", reply_markup=reply_markup)
+    await query.edit_message_text(f"📚 كتب {scholar}:", reply_markup=reply_markup)
 
 # إرسال الكتاب
 async def book_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -97,12 +96,21 @@ async def add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     file_path = f"{title}.pdf"
     await file.download_to_drive(file_path)
 
-    gfile = drive.CreateFile({'title': file_path})
-    gfile.SetContentFile(file_path)
-    gfile.Upload()
+    # رفع الملف إلى Google Drive
+    file_metadata = {'name': file_path}
+    media = MediaFileUpload(file_path, mimetype='application/pdf')
+    uploaded_file = drive_service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+    file_id = uploaded_file.get('id')
 
-    file_url = f"https://drive.google.com/uc?id={gfile['id']}&export=download"
+    # جعل الملف عامًا (قابلًا للتحميل بدون تسجيل دخول)
+    drive_service.permissions().create(
+        fileId=file_id,
+        body={'type': 'anyone', 'role': 'reader'},
+    ).execute()
 
+    file_url = f"https://drive.google.com/uc?id={file_id}&export=download"
+
+    # حفظ في قاعدة البيانات
     cursor.execute("INSERT INTO books (scholar, title, url) VALUES (?, ?, ?)", (scholar, title, file_url))
     conn.commit()
     os.remove(file_path)
@@ -112,7 +120,7 @@ async def add(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown"
     )
 
-# حذف كتاب (للأدمن فقط)
+# حذف كتاب
 async def delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.from_user.id != ADMIN_ID:
         await update.message.reply_text("ليس لديك صلاحية.")
