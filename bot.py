@@ -2,7 +2,6 @@
 import os
 import difflib
 import unicodedata
-import time
 import sqlite3
 import hashlib
 import re
@@ -74,21 +73,29 @@ def normalize(text):
     text = unicodedata.normalize("NFKD", text)
     text = ''.join([c for c in text if not unicodedata.combining(c)])
     text = text.replace("أ", "ا").replace("إ", "ا").replace("آ", "ا").replace("ة", "ه")
+    text = text.replace("_", " ")  # إضافة مهمة: معالجة الشرطات السفلية
     return text.lower().strip()
 
 def smart_search(query):
     norm_query = normalize(query)
     flat = {
-        normalize(title): (author, title)
+        normalize(f"{author} {title}"): (author, title)  # بحث في المؤلف والعنوان معاً
         for author, books in FILES.items()
         for title in books
     }
 
-    exact = [original for norm, original in flat.items() if norm_query in norm]
-    if exact:
-        return exact[0]
-
-    close = difflib.get_close_matches(norm_query, flat.keys(), n=1, cutoff=0.8)
+    # البحث الدقيق أولاً
+    exact_matches = [original for norm, original in flat.items() if norm_query == norm]
+    if exact_matches:
+        return exact_matches[0]
+    
+    # ثم البحث الجزئي
+    partial_matches = [original for norm, original in flat.items() if norm_query in norm]
+    if partial_matches:
+        return partial_matches[0]
+    
+    # ثم البحث التقريبي
+    close = difflib.get_close_matches(norm_query, flat.keys(), n=1, cutoff=0.7)
     return flat[close[0]] if close else None
 
 # =====================================================
@@ -175,7 +182,7 @@ async def send_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         with open(file_path, "rb") as f:
             await update.message.reply_document(InputFile(f, filename=os.path.basename(file_path)))
     else:
-        await update.message.reply_text("❌ لم يتم العثور على الكتاب.")
+        await update.message.reply_text("❌ لم يتم العثور على الكتاب. جرب كتابة اسم الكتاب أو المؤلف بشكل مختلف.")
 
 async def add_book(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
@@ -185,11 +192,12 @@ async def add_book(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not doc or not doc.file_name.endswith(".pdf"):
         return await update.message.reply_text("📎 أرسل ملف PDF بصيغة: اسم_العالم - اسم_الكتاب.pdf")
 
-    # تنظيف اسم الملف أولاً
-    file_name = doc.file_name.replace(".pdf", "").strip()
+    # استخدام الاسم الأصلي للملف
+    original_name = doc.file_name
+    name = original_name.replace(".pdf", "").strip()
     
     # تقسيم الاسم مع مراعاة الشرطة السفلية
-    parts = [part.strip() for part in file_name.split("-", 1)]  # الانقسام على أول - فقط
+    parts = [part.strip() for part in name.split("-", 1)]
     
     if len(parts) != 2:
         return await update.message.reply_text("❗ اسم الملف يجب أن يكون بصيغة: اسم_العالم - اسم_الكتاب.pdf")
@@ -200,9 +208,8 @@ async def add_book(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # إنشاء مجلد files إذا لم يكن موجوداً
     os.makedirs("files", exist_ok=True)
     
-    # إنشاء اسم ملف آمن للتخزين
-    safe_file_name = f"{parts[0].strip()}-{parts[1].strip()}.pdf".replace(" ", "_")
-    file_path = f"files/{safe_file_name}"
+    # استخدام الاسم الأصلي للملف لحفظه
+    file_path = f"files/{original_name}"
 
     # تحميل الملف
     try:
@@ -215,7 +222,13 @@ async def add_book(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_book(author, title, file_path)
     FILES.setdefault(author, {})[title] = file_path
 
-    await update.message.reply_text(f"✅ تم إضافة الكتاب بنجاح:\n📖 {title}\n👤 {author}")
+    # إرسال تأكيد مفصل
+    await update.message.reply_text(
+        f"✅ تم إضافة الكتاب بنجاح:\n"
+        f"📖 العنوان: {title}\n"
+        f"👤 المؤلف: {author}\n"
+        f"📁 اسم الملف: {original_name}"
+    )
 
 async def delete_book(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
