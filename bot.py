@@ -5,6 +5,7 @@ import unicodedata
 import sqlite3
 import hashlib
 import re
+import uuid
 
 from telegram import Update, InputFile, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -34,7 +35,8 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             author TEXT NOT NULL,
             title TEXT NOT NULL,
-            file_path TEXT NOT NULL
+            file_path TEXT NOT NULL,
+            original_name TEXT NOT NULL
         )
     """)
     conn.commit()
@@ -43,18 +45,18 @@ def init_db():
 def load_books():
     conn = sqlite3.connect("books.db")
     cursor = conn.cursor()
-    cursor.execute("SELECT author, title, file_path FROM books")
+    cursor.execute("SELECT author, title, file_path, original_name FROM books")
     books = {}
-    for author, title, path in cursor.fetchall():
+    for author, title, path, original_name in cursor.fetchall():
         books.setdefault(author, {})[title] = path
     conn.close()
     return books
 
-def save_book(author, title, file_path):
+def save_book(author, title, file_path, original_name):
     conn = sqlite3.connect("books.db")
     cursor = conn.cursor()
-    cursor.execute("INSERT INTO books (author, title, file_path) VALUES (?, ?, ?)",
-                   (author, title, file_path))
+    cursor.execute("INSERT INTO books (author, title, file_path, original_name) VALUES (?, ?, ?, ?)",
+                   (author, title, file_path, original_name))
     conn.commit()
     conn.close()
 
@@ -79,7 +81,7 @@ def normalize(text):
 def smart_search(query):
     norm_query = normalize(query)
     flat = {
-        normalize(f"{author} {title}"): (author, title)  # بحث في المؤلف والعنوان معاً
+        normalize(f"{author} {title}"): (author, title)
         for author, books in FILES.items()
         for title in books
     }
@@ -170,7 +172,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                      "يفضل استخدام الصيغة: المؤلف - العنوان.pdf")
 
     elif data == "delete_book" and user_id == ADMIN_ID:
-        await query.edit_message_text("🗑 أرسل اسم الكتاب لحذفه باستخدام:\n/حذف اسم الكتاب")
+        await query.edit_message_text("🗑 أرسل اسم الكتاب لحذفه باستخدام:\n/delete اسم الكتاب")
 
 async def send_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.message.text
@@ -203,26 +205,23 @@ async def add_book(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not doc or not doc.file_name.endswith(".pdf"):
         return await update.message.reply_text("📎 أرسل ملف PDF بصيغة: اسم_العالم - اسم_الكتاب.pdf")
 
-    # استخدام الاسم الأصلي للملف
+    # حفظ الاسم الأصلي للملف
     original_name = doc.file_name
     name = original_name.replace(".pdf", "").strip()
     
     # محاولات متعددة لتقسيم الاسم
-    separator = None
+    parts = None
     
     # المحاولة 1: استخدام الشرطة "-"
     if '-' in name:
-        separator = '-'
         parts = [part.strip() for part in name.split('-', 1)]
     
     # المحاولة 2: استخدام كلمة "لـ"
     elif 'لـ' in name:
-        separator = 'لـ'
         parts = [part.strip() for part in name.split('لـ', 1)]
     
     # المحاولة 3: استخدام كلمة "من تأليف"
     elif 'من تأليف' in name:
-        separator = 'من تأليف'
         parts = [part.strip() for part in name.split('من تأليف', 1)]
         parts.reverse()  # لأن الصيغة ستكون: العنوان من تأليف المؤلف
     
@@ -232,7 +231,7 @@ async def add_book(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if last_space_index != -1:
             parts = [name[:last_space_index].strip(), name[last_space_index+1:].strip()]
         else:
-            parts = [name, "مجهول"]  # إذا لم نجد فاصل
+            parts = [name, "مجهول"]
 
     if len(parts) < 2:
         return await update.message.reply_text("❗ تعذر استخراج المؤلف والعنوان. يرجى استخدام الصيغة: المؤلف - العنوان.pdf")
@@ -243,8 +242,9 @@ async def add_book(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # إنشاء مجلد files إذا لم يكن موجوداً
     os.makedirs("files", exist_ok=True)
     
-    # إنشاء اسم ملف آمن (استبدال المسافات بشرطات سفلية)
-    safe_file_name = f"{author.replace(' ', '')}-{title.replace(' ', '')}.pdf"
+    # إنشاء اسم فريد للملف لتجنب المشاكل
+    unique_id = str(uuid.uuid4())[:8]
+    safe_file_name = f"{unique_id}{author.replace(' ', '')}{title.replace(' ', '')}.pdf"
     file_path = f"files/{safe_file_name}"
 
     # تحميل الملف
@@ -255,7 +255,7 @@ async def add_book(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await update.message.reply_text(f"❌ حدث خطأ أثناء تحميل الملف: {str(e)}")
 
     # حفظ في قاعدة البيانات
-    save_book(author, title, file_path)
+    save_book(author, title, file_path, original_name)
     FILES.setdefault(author, {})[title] = file_path
 
     # إرسال تأكيد مفصل
@@ -263,8 +263,8 @@ async def add_book(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"✅ تم إضافة الكتاب بنجاح:\n"
         f"👤 المؤلف: {author}\n"
         f"📖 العنوان: {title}\n"
-        f"📁 تم حفظه باسم: {safe_file_name}\n\n"
-        f"يمكنك الآن البحث عنه باستخدام: /بحث {title}"
+        f"📁 الاسم الأصلي: {original_name}\n\n"
+        f"يمكنك الآن البحث عنه باستخدام: {title}"
     )
 
 async def delete_book(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -273,7 +273,7 @@ async def delete_book(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     title = " ".join(context.args)
     if not title:
-        return await update.message.reply_text("❗ يرجى تحديد اسم الكتاب\nمثال: /حذف القواعد الأربعة")
+        return await update.message.reply_text("❗ يرجى تحديد اسم الكتاب\nمثال: /delete القواعد الأربعة")
     
     result = smart_search(title)
     if result:
@@ -303,7 +303,6 @@ def main():
     application = Application.builder().token(TOKEN).build()
 
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("حذف", delete_book))
     application.add_handler(CommandHandler("delete", delete_book))
     application.add_handler(CallbackQueryHandler(button_handler))
     application.add_handler(MessageHandler(filters.Document.PDF, add_book))
