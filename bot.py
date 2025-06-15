@@ -108,14 +108,18 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     username = update.effective_user.first_name or "أخي الكريم"
     user_id = update.effective_user.id
     
-    # إنشاء لوحة المفاتيح مع تقصير أسماء المؤلفين
+    # إنشاء لوحة المفاتيح مع أسماء المؤلفين فقط
     keyboard = []
-    for name in list(FILES.keys())[:20]:  # عرض أول 20 مؤلف فقط لتجنب المشاكل
-        # إنشاء معرّف فريد مختصر للمؤلف
-        author_id = hashlib.md5(name.encode()).hexdigest()[:8]
-        keyboard.append([InlineKeyboardButton(name, callback_data=f"author|{author_id}")])
-        # تخزين الاسم الكامل مقابل المعرّف المختصر
-        context.chat_data[author_id] = name
+    authors = list(FILES.keys())
+    for i in range(0, len(authors), 2):
+        row = []
+        for author in authors[i:i+2]:
+            # إنشاء معرّف فريد مختصر للمؤلف
+            author_id = hashlib.md5(author.encode()).hexdigest()[:8]
+            row.append(InlineKeyboardButton(author, callback_data=f"author|{author_id}"))
+            # تخزين الاسم الكامل مقابل المعرّف المختصر
+            context.chat_data[author_id] = author
+        keyboard.append(row)
 
     if user_id == ADMIN_ID:
         keyboard.append([
@@ -136,7 +140,7 @@ async def show_books_by_author(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     buttons, row = [], []
-    for title in list(books.keys())[:50]:  # عرض أول 50 كتاب فقط
+    for title in books:  # عرض جميع الكتب
         # إنشاء معرّف فريد مختصر للكتاب
         book_id = hashlib.md5(f"{author}|{title}".encode()).hexdigest()[:8]
         # تخزين معلومات الكتاب مقابل المعرّف المختصر
@@ -147,6 +151,11 @@ async def show_books_by_author(update: Update, context: ContextTypes.DEFAULT_TYP
             row = []
     if row:
         buttons.append(row)
+
+    # إضافة زر للعودة
+    author_id = hashlib.md5(author.encode()).hexdigest()[:8]
+    context.chat_data[author_id] = author  # تخزين مؤقت للمؤلف
+    buttons.append([InlineKeyboardButton("🔙 العودة", callback_data=f"author|{author_id}")])
 
     await update.callback_query.edit_message_text(
         f"📚 كتب {author}:",
@@ -175,13 +184,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             file_path = FILES.get(author, {}).get(title)
             if file_path:
                 with open(file_path, "rb") as f:
-                    await query.message.reply_document(InputFile(f, filename=os.path.basename(file_path)))
+                    await query.message.reply_document(
+                        InputFile(f, filename=f"{author} - {title}.pdf")
+                    )
                 return
         await query.message.reply_text("❌ لم يتم العثور على الكتاب.")
 
     elif data == "add_book" and user_id == ADMIN_ID:
-        await query.edit_message_text("📥 أرسل ملف PDF. سأحاول استخراج اسم المؤلف والعنوان تلقائياً.\n"
-                                     "يفضل استخدام الصيغة: المؤلف - العنوان.pdf")
+        await query.edit_message_text("📥 أرسل ملف PDF. يجب أن يكون اسم الملف بالصيغة: المؤلف - العنوان.pdf")
 
     elif data == "delete_book" and user_id == ADMIN_ID:
         await query.edit_message_text("🗑 أرسل اسم الكتاب لحذفه باستخدام:\n/delete اسم الكتاب")
@@ -195,7 +205,9 @@ async def send_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         file_path = FILES[author][title]
         await update.message.reply_text(f"📘 {title}\n👤 المؤلف: {author}")
         with open(file_path, "rb") as f:
-            await update.message.reply_document(InputFile(f, filename=os.path.basename(file_path)))
+            await update.message.reply_document(
+                InputFile(f, filename=f"{author} - {title}.pdf")
+            )
     else:
         # البحث التقريبي
         all_titles = [title for books in FILES.values() for title in books]
@@ -215,48 +227,29 @@ async def add_book(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     doc = update.message.document
     if not doc or not doc.file_name.endswith(".pdf"):
-        return await update.message.reply_text("📎 أرسل ملف PDF بصيغة: اسم_العالم - اسم_الكتاب.pdf")
+        return await update.message.reply_text("📎 أرسل ملف PDF بصيغة: المؤلف - العنوان.pdf")
 
     # حفظ الاسم الأصلي للملف
     original_name = doc.file_name
     name = original_name.replace(".pdf", "").strip()
     
-    # محاولات متعددة لتقسيم الاسم
-    parts = None
-    
-    # المحاولة 1: استخدام الشرطة "-"
-    if '-' in name:
-        parts = [part.strip() for part in name.split('-', 1)]
-    
-    # المحاولة 2: استخدام كلمة "لـ"
-    elif 'لـ' in name:
-        parts = [part.strip() for part in name.split('لـ', 1)]
-    
-    # المحاولة 3: استخدام كلمة "من تأليف"
-    elif 'من تأليف' in name:
-        parts = [part.strip() for part in name.split('من تأليف', 1)]
-        parts.reverse()  # لأن الصيغة ستكون: العنوان من تأليف المؤلف
-    
-    # المحاولة 4: استخدام آخر مسافة في السلسلة
-    else:
-        last_space_index = name.rfind(' ')
-        if last_space_index != -1:
-            parts = [name[:last_space_index].strip(), name[last_space_index+1:].strip()]
-        else:
-            parts = [name, "مجهول"]
+    # تقسيم الاسم إلى مؤلف وعنوان باستخدام الشرطة فقط
+    if '-' not in name:
+        return await update.message.reply_text("❗ اسم الملف يجب أن يحتوي على شرطة '-' لفصل المؤلف عن العنوان. مثال: المؤلف - العنوان.pdf")
 
+    parts = [part.strip() for part in name.split('-', 1)]  # الانقسام على أول شرطة فقط
     if len(parts) < 2:
         return await update.message.reply_text("❗ تعذر استخراج المؤلف والعنوان. يرجى استخدام الصيغة: المؤلف - العنوان.pdf")
 
-    author = parts[0].replace("_", " ").strip()
-    title = parts[1].replace("_", " ").strip()
+    author = parts[0]
+    title = parts[1]
 
     # إنشاء مجلد files إذا لم يكن موجوداً
     os.makedirs("files", exist_ok=True)
     
-    # إنشاء اسم فريد للملف لتجنب المشاكل
+    # إنشاء اسم فريد للملف
     unique_id = str(uuid.uuid4())[:8]
-    safe_file_name = f"{unique_id}{author.replace(' ', '')}{title.replace(' ', '')}.pdf"
+    safe_file_name = f"{author.replace(' ', '')} - {title.replace(' ', '')}.pdf"
     file_path = f"files/{safe_file_name}"
 
     # تحميل الملف
@@ -275,8 +268,7 @@ async def add_book(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"✅ تم إضافة الكتاب بنجاح:\n"
         f"👤 المؤلف: {author}\n"
         f"📖 العنوان: {title}\n"
-        f"📁 الاسم الأصلي: {original_name}\n\n"
-        f"يمكنك الآن البحث عنه باستخدام: {title}"
+        f"📁 تم حفظه باسم: {safe_file_name}"
     )
 
 async def delete_book(update: Update, context: ContextTypes.DEFAULT_TYPE):
