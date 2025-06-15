@@ -2,11 +2,15 @@ import os
 import sqlite3
 import logging
 import tempfile
+from aiohttp import web
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackQueryHandler, ContextTypes
+from telegram.ext import (
+    Application, CommandHandler, MessageHandler,
+    filters, CallbackQueryHandler, ContextTypes
+)
 
 # إعداد تسجيل الأخطاء
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -151,14 +155,31 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("لم يتم العثور على كتاب بهذا الاسم.")
 
-# تشغيل البوت
+# ========== إعداد Webhook ==========
+async def webhook_handler(request):
+    data = await request.json()
+    update = Update.de_json(data, application.bot)
+    await application.process_update(update)
+    return web.Response(text="OK")
+
+async def on_startup(app: web.Application):
+    webhook_url = f"{os.getenv('WEBHOOK_BASE_URL')}/webhook/{TOKEN}"
+    await application.bot.set_webhook(webhook_url)
+    print(f"✅ Webhook set to: {webhook_url}")
+
+# ========== تشغيل التطبيق ==========
 if __name__ == "__main__":
-    app = Application.builder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("add", add))
-    app.add_handler(CommandHandler("delete", delete))
-    app.add_handler(CallbackQueryHandler(scholar_callback, pattern="^scholar:"))
-    app.add_handler(CallbackQueryHandler(book_callback, pattern="^book:"))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-    print("Bot is running...")
-    app.run_polling()
+    application = Application.builder().token(TOKEN).build()
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("add", add))
+    application.add_handler(CommandHandler("delete", delete))
+    application.add_handler(CallbackQueryHandler(scholar_callback, pattern="^scholar:"))
+    application.add_handler(CallbackQueryHandler(book_callback, pattern="^book:"))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+
+    app = web.Application()
+    app.router.add_post(f"/webhook/{TOKEN}", webhook_handler)
+    app.on_startup.append(on_startup)
+
+    port = int(os.environ.get("PORT", 8080))
+    web.run_app(app, host="0.0.0.0", port=port)
