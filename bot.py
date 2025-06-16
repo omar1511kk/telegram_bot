@@ -26,7 +26,6 @@ GDRIVE_FOLDER_ID = os.getenv("GDRIVE_FOLDER_ID")
 
 # =================== Google Drive API ======================
 
-# تحميل بيانات الاعتماد من متغير البيئة كنص JSON
 creds_json = os.getenv("GDRIVE_CREDENTIALS_JSON")
 if not creds_json:
     raise ValueError("❌ لم يتم العثور على متغير البيئة GDRIVE_CREDENTIALS_JSON")
@@ -224,7 +223,10 @@ async def add_book(update: Update, context: ContextTypes.DEFAULT_TYPE):
     author, title = [s.strip() for s in caption.split("-", 1)]
     os.makedirs("temp", exist_ok=True)
     file_path = f"temp/{doc.file_name}"
-    await doc.get_file().download_to_drive(file_path)
+
+    # ✅ التعديل هنا
+    file = await doc.get_file()
+    await file.download_to_drive(file_path)
 
     try:
         gdrive_url = upload_to_gdrive(file_path, f"{author} - {title}.pdf")
@@ -282,5 +284,5 @@ def main():
     port = int(os.getenv("PORT", 8000))
     web.run_app(web_app, port=port)
 
-if __name__== "__main__":
+if __name__ == "__main__":
     main()
