@@ -247,13 +247,17 @@ app = Application.builder().token(TOKEN).build()
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("add", add_book))
 app.add_handler(CommandHandler("delete", delete_book))
-app.add_handler(MessageHandler(filters.Document.PDF, add_book))
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-app.add_handler(CallbackQueryHandler(button_handler))
+# ✅ من السطر 250 حتى نهاية الملف
+if __name__ == '__main__':
+    print("البوت قيد التشغيل...")
 
-if __name__ == "__main__":
+    # استخدم WEBHOOK_BASE_URL بدلاً من RENDER_EXTERNAL_URL
+    WEBHOOK_URL = os.environ.get("WEBHOOK_BASE_URL")
+    if not WEBHOOK_URL:
+        raise RuntimeError("يجب تحديد متغير البيئة WEBHOOK_BASE_URL")
+
     app.run_webhook(
         listen="0.0.0.0",
         port=int(os.environ.get("PORT", 8443)),
-        webhook_url=os.environ.get("WEBHOOK_URL"),
+        webhook_url=WEBHOOK_URL
     )
