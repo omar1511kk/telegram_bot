@@ -239,17 +239,19 @@ async def add_book(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await update.message.reply_text("❗ اسم الملف يجب أن يحتوي على شرطة '-' لفصل المؤلف عن العنوان.\n\n"
                                              "مثال: محمد بن عبد الوهاب - القواعد الأربعة.pdf")
 
-    # إزالة الامتداد .pdf
-    name_without_ext = re.sub(r'\.pdf$', '', original_name, flags=re.IGNORECASE)
-    
     # تقسيم الاسم إلى مؤلف وعنوان باستخدام الشرطة فقط
-    parts = name_without_ext.split('-', 1)  # الانقسام على أول شرطة فقط
+    parts = original_name.split('-', 1)  # الانقسام على أول شرطة فقط
     if len(parts) < 2:
         return await update.message.reply_text("❗ تعذر استخراج المؤلف والعنوان. يرجى استخدام الصيغة: المؤلف - العنوان.pdf\n\n"
                                              "مثال: محمد بن عبد الوهاب - القواعد الأربعة.pdf")
 
+    # استخراج المؤلف والعنوان
     author = parts[0].strip()
     title = parts[1].strip()
+    
+    # إزالة امتداد .pdf من العنوان
+    if title.lower().endswith('.pdf'):
+        title = title[:-4].strip()
 
     # إنشاء مجلد files إذا لم يكن موجوداً
     os.makedirs("files", exist_ok=True)
