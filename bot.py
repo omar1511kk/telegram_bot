@@ -4,8 +4,8 @@ import difflib
 import unicodedata
 import sqlite3
 import hashlib
-import re
 import uuid
+import re
 
 from telegram import Update, InputFile, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -191,7 +191,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text("❌ لم يتم العثور على الكتاب.")
 
     elif data == "add_book" and user_id == ADMIN_ID:
-        await query.edit_message_text("📥 أرسل ملف PDF. يجب أن يكون اسم الملف بالصيغة: المؤلف - العنوان.pdf")
+        await query.edit_message_text("📥 أرسل ملف PDF. يجب أن يكون اسم الملف بالصيغة: المؤلف - العنوان.pdf\n\n"
+                                     "مثال: محمد بن عبد الوهاب - القواعد الأربعة.pdf")
 
     elif data == "delete_book" and user_id == ADMIN_ID:
         await query.edit_message_text("🗑 أرسل اسم الكتاب لحذفه باستخدام:\n/delete اسم الكتاب")
@@ -226,30 +227,35 @@ async def add_book(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await update.message.reply_text("🚫 هذا الأمر للأدمن فقط.")
 
     doc = update.message.document
-    if not doc or not doc.file_name.endswith(".pdf"):
-        return await update.message.reply_text("📎 أرسل ملف PDF بصيغة: المؤلف - العنوان.pdf")
+    if not doc or not doc.file_name.lower().endswith(".pdf"):
+        return await update.message.reply_text("📎 أرسل ملف PDF بصيغة: المؤلف - العنوان.pdf\n\n"
+                                             "مثال: محمد بن عبد الوهاب - القواعد الأربعة.pdf")
 
     # حفظ الاسم الأصلي للملف
     original_name = doc.file_name
-    name = original_name.replace(".pdf", "").strip()
+    
+    # التحقق من صيغة اسم الملف
+    if '-' not in original_name:
+        return await update.message.reply_text("❗ اسم الملف يجب أن يحتوي على شرطة '-' لفصل المؤلف عن العنوان.\n\n"
+                                             "مثال: محمد بن عبد الوهاب - القواعد الأربعة.pdf")
+
+    # إزالة الامتداد .pdf
+    name_without_ext = re.sub(r'\.pdf$', '', original_name, flags=re.IGNORECASE)
     
     # تقسيم الاسم إلى مؤلف وعنوان باستخدام الشرطة فقط
-    if '-' not in name:
-        return await update.message.reply_text("❗ اسم الملف يجب أن يحتوي على شرطة '-' لفصل المؤلف عن العنوان. مثال: المؤلف - العنوان.pdf")
-
-    parts = [part.strip() for part in name.split('-', 1)]  # الانقسام على أول شرطة فقط
+    parts = name_without_ext.split('-', 1)  # الانقسام على أول شرطة فقط
     if len(parts) < 2:
-        return await update.message.reply_text("❗ تعذر استخراج المؤلف والعنوان. يرجى استخدام الصيغة: المؤلف - العنوان.pdf")
+        return await update.message.reply_text("❗ تعذر استخراج المؤلف والعنوان. يرجى استخدام الصيغة: المؤلف - العنوان.pdf\n\n"
+                                             "مثال: محمد بن عبد الوهاب - القواعد الأربعة.pdf")
 
-    author = parts[0]
-    title = parts[1]
+    author = parts[0].strip()
+    title = parts[1].strip()
 
     # إنشاء مجلد files إذا لم يكن موجوداً
     os.makedirs("files", exist_ok=True)
     
-    # إنشاء اسم فريد للملف
-    unique_id = str(uuid.uuid4())[:8]
-    safe_file_name = f"{author.replace(' ', '')} - {title.replace(' ', '')}.pdf"
+    # إنشاء اسم ملف آمن مع الحفاظ على المسافات
+    safe_file_name = f"{author} - {title}.pdf"
     file_path = f"files/{safe_file_name}"
 
     # تحميل الملف
