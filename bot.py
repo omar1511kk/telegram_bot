@@ -72,7 +72,7 @@ def normalize(text):
     text = unicodedata.normalize("NFKD", text)
     text = ''.join([c for c in text if not unicodedata.combining(c)])
     text = text.replace("أ", "ا").replace("إ", "ا").replace("آ", "ا").replace("ة", "ه")
-    text = text.replace("_", " ")  # معالجة الشرطات السفلية
+    text = text.replace("_", " ")
     return text.lower().strip()
 
 def smart_search(query):
@@ -145,10 +145,16 @@ async def show_books_by_author(update: Update, context: ContextTypes.DEFAULT_TYP
     context.chat_data[author_id] = author
     buttons.append([InlineKeyboardButton("🔙 العودة", callback_data=f"author|{author_id}")])
 
-    await update.callback_query.edit_message_text(
-        f"📚 كتب {author}:",
-        reply_markup=InlineKeyboardMarkup(buttons)
-    )
+    message = update.callback_query.message
+    current_text = message.text or ""
+    new_text = f"📚 كتب {author}:"
+    new_markup = InlineKeyboardMarkup(buttons)
+
+    if current_text != new_text or message.reply_markup != new_markup:
+        try:
+            await update.callback_query.edit_message_text(new_text, reply_markup=new_markup)
+        except Exception as e:
+            print(f"⚠ خطأ في تعديل الرسالة: {e}")
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
