@@ -4,8 +4,9 @@ import unicodedata
 import sqlite3
 import hashlib
 import re
+import json
 
-from telegram import Update, InputFile, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
     ContextTypes, CallbackQueryHandler, filters
@@ -25,9 +26,14 @@ GDRIVE_FOLDER_ID = os.getenv("GDRIVE_FOLDER_ID")
 
 # =================== Google Drive API ======================
 
-creds = service_account.Credentials.from_service_account_file(
-    os.getenv("GDRIVE_CREDENTIALS_JSON"),
-    scopes=["https://www.googleapis.com/auth/drive"]
+# تحميل بيانات الاعتماد من متغير البيئة كنص JSON
+creds_json = os.getenv("GDRIVE_CREDENTIALS_JSON")
+if not creds_json:
+    raise ValueError("❌ لم يتم العثور على متغير البيئة GDRIVE_CREDENTIALS_JSON")
+
+creds_dict = json.loads(creds_json)
+creds = service_account.Credentials.from_service_account_info(
+    creds_dict, scopes=["https://www.googleapis.com/auth/drive"]
 )
 drive_service = build("drive", "v3", credentials=creds)
 
@@ -276,5 +282,5 @@ def main():
     port = int(os.getenv("PORT", 8000))
     web.run_app(web_app, port=port)
 
-if __name__ == "__main__":
+if __name__== "__main__":
     main()
